@@ -1,28 +1,64 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_slidable/flutter_slidable.dart';
 
 import '../../data/providers.dart';
 import '../../domain/graph.dart';
-import '../../services/graph_service.dart';
+import '../../domain/list_tree.dart';
 import '../../services/sample_data.dart';
+import '../common/type_pickers.dart';
+import 'add_sheet.dart';
+import 'edit_sheet.dart';
+import 'list_row_tile.dart';
+import 'list_state.dart';
 
-/// Phase 2 stand-in for the list view: a flat list of every node with its
-/// resolved style, so the data layer can be checked on the phone.
-/// Phase 3 replaces it with the real collapsible tree.
-class ListScreen extends ConsumerWidget {
+/// The collapsible outline of everyone and everything.
+class ListScreen extends ConsumerStatefulWidget {
   const ListScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final snapshot = ref.watch(graphSnapshotProvider);
+  ConsumerState<ListScreen> createState() => _ListScreenState();
+}
+
+class _ListScreenState extends ConsumerState<ListScreen> {
+  final _scroll = ScrollController();
+  final _listKey = GlobalKey();
+  String? _highlightKey;
+  Timer? _highlightTimer;
+
+  // Auto-scroll while dragging a row near the top or bottom edge.
+  Timer? _autoScroll;
+  double? _dragY;
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    _highlightTimer?.cancel();
+    _autoScroll?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tree = ref.watch(listTreeProvider);
     return Scaffold(
       appBar: AppBar(
         title: const Text('People'),
         actions: [if (kDebugMode) const _DebugMenu()],
       ),
-      body: switch (snapshot) {
-        AsyncData(:final value) => _NodeList(snapshot: value),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => showAddSheet(context, parentId: null),
+        icon: const Icon(Icons.person_add),
+        label: const Text('Add person'),
+      ),
+      body: switch (tree) {
+        AsyncData(value: (final snapshot, final tree)) =>
+          tree.rows.isEmpty
+              ? _EmptyState(onAdd: () => showAddSheet(context, parentId: null))
+              : _buildList(snapshot, tree),
         AsyncError(:final error) => Center(
           child: Text('Database error: $error'),
         ),
@@ -30,96 +66,226 @@ class ListScreen extends ConsumerWidget {
       },
     );
   }
-}
 
-class _NodeList extends StatelessWidget {
-  const _NodeList({required this.snapshot});
-
-  final GraphSnapshot snapshot;
-
-  @override
-  Widget build(BuildContext context) {
-    final nodes = snapshot.nodes.values.toList()
-      ..sort((a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
-    final summary =
-        '${snapshot.nodes.length} bubbles · ${snapshot.edges.length} lines · '
-        '${snapshot.nodeTypes.byId.length} bubble types · '
-        '${snapshot.edgeTypes.byId.length} line types';
-
-    if (nodes.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(
-            'No bubbles yet.\n\n$summary'
-            '${kDebugMode ? '\n\nUse ⋮ → Load sample data.' : ''}',
-            textAlign: TextAlign.center,
-          ),
+  Widget _buildList(GraphSnapshot snapshot, ListTree tree) {
+    final actions = ListRowActions(
+      onToggle: (row) => ref.read(expansionProvider.notifier).toggle(row.key),
+      onJumpTo: _jumpTo,
+      onShowParents: (row) => _showParents(snapshot, row),
+      onAdd: (row) => showAddSheet(context, parentId: row.nodeId),
+      onEdit: (row) =>
+          showEditSheet(context, nodeId: row.nodeId, edgeId: row.viaEdgeId),
+      onUnlink: (row) =>
+          _run(() => ref.read(graphServiceProvider).deleteEdge(row.viaEdgeId!)),
+      onDelete: (row) => _confirmDelete(snapshot, row.nodeId),
+      onDrop: _drop,
+      onDragStart: _startAutoScroll,
+      onDragUpdate: (pos) => _dragY = pos.dy,
+      onDragEnd: _stopAutoScroll,
+    );
+    // SlidableAutoCloseBehavior keeps only one row's actions open at a time.
+    return SlidableAutoCloseBehavior(
+      child: ListView.builder(
+        key: _listKey,
+        controller: _scroll,
+        itemExtent: listRowHeight,
+        // Room so the floating button never covers the last row.
+        padding: const EdgeInsets.only(bottom: 88),
+        itemCount: tree.rows.length,
+        itemBuilder: (context, i) => ListRowTile(
+          key: ValueKey(tree.rows[i].key),
+          row: tree.rows[i],
+          snapshot: snapshot,
+          actions: actions,
+          highlighted: tree.rows[i].key == _highlightKey,
         ),
+      ),
+    );
+  }
+
+  /// Expands the way to [nodeId]'s first appearance, scrolls to it and
+  /// flashes it.
+  void _jumpTo(String nodeId) {
+    final current = ref.read(listTreeProvider).value?.$2;
+    final home = current?.homeKeys[nodeId];
+    if (home == null) return;
+    ref.read(expansionProvider.notifier).reveal(home);
+    final tree = ref.read(listTreeProvider).value!.$2;
+    final index = tree.indexOfKey(home);
+    setState(() => _highlightKey = home);
+    _highlightTimer?.cancel();
+    _highlightTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (mounted) setState(() => _highlightKey = null);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scroll.hasClients || index < 0) return;
+      final viewport = _scroll.position.viewportDimension;
+      final target = (index * listRowHeight - viewport / 3).clamp(
+        0.0,
+        _scroll.position.maxScrollExtent,
       );
-    }
-    return ListView.builder(
-      itemCount: nodes.length + 1,
-      itemBuilder: (context, i) => i == 0
-          ? Padding(
-              padding: const EdgeInsets.all(16),
+      _scroll.animateTo(
+        target,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  void _showParents(GraphSnapshot snapshot, ListRow row) {
+    final parents = [
+      for (final e in snapshot.hierarchicalEdges)
+        if (e.targetId == row.nodeId) e,
+    ];
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
               child: Text(
-                summary,
-                style: Theme.of(context).textTheme.bodySmall,
+                '${snapshot.nodes[row.nodeId]!.label} is under',
+                style: Theme.of(sheetContext).textTheme.titleMedium,
               ),
-            )
-          : _NodeTile(snapshot: snapshot, node: nodes[i - 1]),
+            ),
+            for (final e in parents)
+              ListTile(
+                leading: Icon(
+                  e.sourceId == row.parentNodeId
+                      ? Icons.subdirectory_arrow_right
+                      : Icons.north_west,
+                ),
+                title: Text(snapshot.nodes[e.sourceId]!.label),
+                subtitle: Text(
+                  snapshot.edgeTypes.byId[e.typeId]?.name.toLowerCase() ?? '',
+                ),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _jumpTo(e.sourceId);
+                },
+              ),
+          ],
+        ),
+      ),
     );
+  }
+
+  Future<void> _confirmDelete(GraphSnapshot snapshot, String nodeId) async {
+    final label = snapshot.nodes[nodeId]!.label;
+    final lines = snapshot.edges.values
+        .where((e) => e.sourceId == nodeId || e.targetId == nodeId)
+        .length;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Delete “$label”?'),
+        content: Text(
+          'This removes it everywhere it appears'
+          '${lines == 0 ? '' : ', along with its $lines ${lines == 1 ? 'line' : 'lines'}'}. '
+          'Bubbles under it stay; any left without a parent move to the top.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok ?? false) {
+      await _run(() => ref.read(graphServiceProvider).deleteNode(nodeId));
+    }
+  }
+
+  /// A row dropped onto another: move its line under the target, or give a
+  /// root row a parent using the last line type.
+  void _drop(ListRow dragged, ListRow target) {
+    final service = ref.read(graphServiceProvider);
+    final edgeId = dragged.viaEdgeId;
+    _run(
+      () => edgeId != null
+          ? service.moveEdge(edgeId, target.nodeId)
+          : service.createEdge(
+              sourceId: target.nodeId,
+              targetId: dragged.nodeId,
+              typeId: ref.read(lastEdgeTypeProvider),
+            ),
+    );
+  }
+
+  Future<void> _run(Future<Object?> Function() write) async {
+    try {
+      await write();
+    } catch (e) {
+      if (mounted) showGraphError(context, e);
+    }
+  }
+
+  void _startAutoScroll() {
+    _autoScroll?.cancel();
+    _autoScroll = Timer.periodic(const Duration(milliseconds: 16), (_) {
+      final box = _listKey.currentContext?.findRenderObject() as RenderBox?;
+      final y = _dragY;
+      if (box == null || y == null || !_scroll.hasClients) return;
+      final local = box.globalToLocal(Offset(0, y)).dy;
+      const edge = 72.0, maxSpeed = 14.0;
+      double delta = 0;
+      if (local < edge) delta = -maxSpeed * (1 - local / edge);
+      if (local > box.size.height - edge) {
+        delta = maxSpeed * (1 - (box.size.height - local) / edge);
+      }
+      if (delta == 0) return;
+      final position = _scroll.position;
+      _scroll.jumpTo(
+        (position.pixels + delta).clamp(0.0, position.maxScrollExtent),
+      );
+    });
+  }
+
+  void _stopAutoScroll() {
+    _autoScroll?.cancel();
+    _autoScroll = null;
+    _dragY = null;
   }
 }
 
-class _NodeTile extends StatelessWidget {
-  const _NodeTile({required this.snapshot, required this.node});
+class _EmptyState extends StatelessWidget {
+  const _EmptyState({required this.onAdd});
 
-  final GraphSnapshot snapshot;
-  final GraphNode node;
+  final VoidCallback onAdd;
 
   @override
-  Widget build(BuildContext context) {
-    final style = snapshot.styleOf(node);
-    final typeNames = node.typeIds.isEmpty
-        ? 'Node'
-        : node.typeIds
-              .map((t) => snapshot.nodeTypes.byId[t]?.name ?? t)
-              .join(', ');
-    final outgoing = [
-      for (final e in snapshot.edges.values.where((e) => e.sourceId == node.id))
-        '${snapshot.edgeTypes.byId[e.typeId]?.name.toLowerCase()} '
-            '${snapshot.nodes[e.targetId]?.label}'
-            '${e.label == null ? '' : ' (${e.label})'}',
-    ];
-    return ListTile(
-      leading: Container(
-        width: 28,
-        height: 28,
-        decoration: BoxDecoration(
-          color: Color(style.fillColor!),
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: Color(style.outlineColor!),
-            width: style.outlineWidth!,
+  Widget build(BuildContext context) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('No one here yet.', textAlign: TextAlign.center),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: onAdd,
+            icon: const Icon(Icons.person_add),
+            label: const Text('Add your first person'),
           ),
-        ),
+          if (kDebugMode) ...[
+            const SizedBox(height: 16),
+            const Text(
+              'Debug: ⋮ → Load sample data',
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ],
       ),
-      title: Text(
-        node.label,
-        style: TextStyle(
-          fontWeight: style.bold! ? FontWeight.bold : FontWeight.normal,
-          fontFamily: style.fontFamily,
-        ),
-      ),
-      subtitle: Text(
-        [typeNames, ...outgoing].join(' · '),
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-      ),
-    );
-  }
+    ),
+  );
 }
 
 /// Debug-only tools: never shown in release builds.
@@ -160,8 +326,8 @@ class _DebugMenu extends ConsumerWidget {
       messenger.showSnackBar(
         SnackBar(content: Text('Done in ${watch.elapsedMilliseconds} ms')),
       );
-    } on GraphRuleException catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (e) {
+      if (context.mounted) showGraphError(context, e);
     }
   }
 }

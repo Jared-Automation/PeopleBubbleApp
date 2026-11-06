@@ -79,6 +79,19 @@ use; it may go on the Play Store later, so keep it structured like a real app.
 - Node `x`/`y` are nullable: null means "not placed yet"; the canvas places it on first show.
 - Every row has `createdAt` / `updatedAt`.
 
+## List-view decisions (confirmed Nov 6, 2026)
+
+- Swipe left on a child row offers **Unlink** (remove just that line) and **Delete** (the
+  bubble everywhere, after a confirm that says how many lines go too). Root rows: Delete only.
+- Add sheet defaults: **Thing** for children, **Person** for the "add person" button; the sheet
+  remembers the last picks while open.
+- Order: roots are people first, then A–Z. Children are grouped by line type (Loves, Likes,
+  Dislikes, then others), A–Z within a group.
+- Everything starts expanded except repeat appearances of shared bubbles. Expand state is
+  in-memory only (per app run).
+- After **Add** the sheet stays open with the name cleared and focused, for quick runs.
+- The last-used line type persists across launches (`shared_preferences`).
+
 ## Project setup facts
 
 - Application ID: `com.jade.peoplebubble`. Dart package: `people_bubble`.

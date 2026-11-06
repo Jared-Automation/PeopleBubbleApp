@@ -29,40 +29,45 @@ class GraphService {
     List<String> typeIds = const [],
     double? x,
     double? y,
+  }) => _write((s) => _insertNode(s, label, typeIds, x: x, y: y));
+
+  /// Creates a bubble under [parentId] and the line to it, in one step.
+  /// Used by the list's add sheet; a refusal leaves neither behind.
+  Future<({String nodeId, String edgeId})> createChildNode({
+    required String parentId,
+    required String label,
+    required String edgeTypeId,
+    List<String> typeIds = const [],
+    String? edgeLabel,
   }) => _write((s) async {
-    final cleanLabel = _requireLabel(label);
-    final types = _checkNodeTypes(s, typeIds);
-    final id = newId();
-    await _db
-        .into(_db.nodes)
-        .insert(
-          NodesCompanion.insert(
-            id: Value(id),
-            label: cleanLabel,
-            x: Value(x),
-            y: Value(y),
-          ),
-        );
-    await _insertTypeLinks(id, types);
-    return id;
+    _requireNode(s, parentId);
+    _requireEdgeType(s, edgeTypeId);
+    final nodeId = await _insertNode(s, label, typeIds);
+    // A brand-new bubble has no children, so this line can't form a loop.
+    final edgeId = await _insertEdge(parentId, nodeId, edgeTypeId, edgeLabel);
+    return (nodeId: nodeId, edgeId: edgeId);
   });
 
-  Future<void> renameNode(String id, String label) => _write((s) async {
-    _requireNode(s, id);
-    await _updateNode(id, NodesCompanion(label: Value(_requireLabel(label))));
-  });
-
-  /// Replaces a node's types. Redundant ancestors are dropped; conflicting
-  /// combinations are refused.
-  Future<void> setNodeTypes(String id, List<String> typeIds) =>
+  /// Renames a node and/or replaces its types, in one step.
+  Future<void> updateNode(String id, {String? label, List<String>? typeIds}) =>
       _write((s) async {
         _requireNode(s, id);
-        final types = _checkNodeTypes(s, typeIds);
-        await (_db.delete(
-          _db.nodeTypeLinks,
-        )..where((l) => l.nodeId.equals(id))).go();
-        await _insertTypeLinks(id, types);
-        await _updateNode(id, const NodesCompanion());
+        final cleanLabel = label == null ? null : _requireLabel(label);
+        final types = typeIds == null ? null : _checkNodeTypes(s, typeIds);
+        if (types != null) {
+          await (_db.delete(
+            _db.nodeTypeLinks,
+          )..where((l) => l.nodeId.equals(id))).go();
+          await _insertTypeLinks(id, types);
+        }
+        await _updateNode(
+          id,
+          NodesCompanion(
+            label: cleanLabel == null
+                ? const Value.absent()
+                : Value(cleanLabel),
+          ),
+        );
       });
 
   /// Saves a node's canvas position. Call on drag end, not every frame.
@@ -102,32 +107,42 @@ class GraphService {
       throw const InvalidInput("A line can't connect a bubble to itself.");
     }
     _checkNoCycle(s, sourceId, targetId, typeId);
-    final id = newId();
-    await _db
-        .into(_db.edges)
-        .insert(
-          EdgesCompanion.insert(
-            id: Value(id),
-            sourceId: sourceId,
-            targetId: targetId,
-            typeId: typeId,
+    return _insertEdge(sourceId, targetId, typeId, label);
+  });
+
+  /// Moves a line so it hangs under [newSourceId] instead, keeping its type
+  /// and label. Used when dragging a row to a new parent in the list.
+  Future<void> moveEdge(String id, String newSourceId) => _write((s) async {
+    final edge = _requireEdge(s, id);
+    _requireNode(s, newSourceId);
+    if (newSourceId == edge.targetId) {
+      throw const InvalidInput("A line can't connect a bubble to itself.");
+    }
+    _checkNoCycle(s, newSourceId, edge.targetId, edge.typeId, ignoreEdgeId: id);
+    await _updateEdge(id, EdgesCompanion(sourceId: Value(newSourceId)));
+  });
+
+  /// Changes a line's type and label together (from the list's edit sheet).
+  /// An empty [label] clears it.
+  Future<void> updateEdge(String id, {required String typeId, String? label}) =>
+      _write((s) async {
+        final edge = _requireEdge(s, id);
+        _requireEdgeType(s, typeId);
+        _checkNoCycle(
+          s,
+          edge.sourceId,
+          edge.targetId,
+          typeId,
+          ignoreEdgeId: id,
+        );
+        await _updateEdge(
+          id,
+          EdgesCompanion(
+            typeId: Value(typeId),
             label: Value(_optionalLabel(label)),
           ),
         );
-    return id;
-  });
-
-  Future<void> setEdgeType(String id, String typeId) => _write((s) async {
-    final edge = _requireEdge(s, id);
-    _requireEdgeType(s, typeId);
-    _checkNoCycle(s, edge.sourceId, edge.targetId, typeId, ignoreEdgeId: id);
-    await _updateEdge(id, EdgesCompanion(typeId: Value(typeId)));
-  });
-
-  Future<void> setEdgeLabel(String id, String? label) => _write((s) async {
-    _requireEdge(s, id);
-    await _updateEdge(id, EdgesCompanion(label: Value(_optionalLabel(label))));
-  });
+      });
 
   /// Per-edge style overrides. Whether an edge is hierarchical comes from its
   /// type only, so a `hierarchical` value here is ignored.
@@ -400,6 +415,51 @@ class GraphService {
   List<(String, String)> _hierarchicalPairs(GraphSnapshot s) => [
     for (final e in s.hierarchicalEdges) (e.sourceId, e.targetId),
   ];
+
+  Future<String> _insertNode(
+    GraphSnapshot s,
+    String label,
+    List<String> typeIds, {
+    double? x,
+    double? y,
+  }) async {
+    final cleanLabel = _requireLabel(label);
+    final types = _checkNodeTypes(s, typeIds);
+    final id = newId();
+    await _db
+        .into(_db.nodes)
+        .insert(
+          NodesCompanion.insert(
+            id: Value(id),
+            label: cleanLabel,
+            x: Value(x),
+            y: Value(y),
+          ),
+        );
+    await _insertTypeLinks(id, types);
+    return id;
+  }
+
+  Future<String> _insertEdge(
+    String sourceId,
+    String targetId,
+    String typeId,
+    String? label,
+  ) async {
+    final id = newId();
+    await _db
+        .into(_db.edges)
+        .insert(
+          EdgesCompanion.insert(
+            id: Value(id),
+            sourceId: sourceId,
+            targetId: targetId,
+            typeId: typeId,
+            label: Value(_optionalLabel(label)),
+          ),
+        );
+    return id;
+  }
 
   Future<void> _insertTypeLinks(String nodeId, List<String> typeIds) async {
     await _db.batch((b) {

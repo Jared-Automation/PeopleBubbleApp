@@ -127,7 +127,7 @@ void main() {
         typeId: SeedIds.related,
       );
       await expectLater(
-        g.setEdgeType(back, SeedIds.likes),
+        g.updateEdge(back, typeId: SeedIds.likes),
         throwsA(isA<CycleBlocked>()),
       );
     });
@@ -152,6 +152,96 @@ void main() {
       final s = await snap();
       expect(s.edges[id]!.overrides, const EdgeStyle(width: 5));
       expect(s.isHierarchical(s.edges[id]!), isTrue);
+    });
+  });
+
+  group('list operations', () {
+    test('createChildNode makes the bubble and its line together', () async {
+      final sam = await g.createNode(label: 'Sam', typeIds: [SeedIds.person]);
+      final (:nodeId, :edgeId) = await g.createChildNode(
+        parentId: sam,
+        label: 'Sushi',
+        typeIds: [SeedIds.thing],
+        edgeTypeId: SeedIds.loves,
+        edgeLabel: ' a lot ',
+      );
+      final s = await snap();
+      expect(s.nodes[nodeId]!.typeIds, [SeedIds.thing]);
+      expect(s.edges[edgeId]!.sourceId, sam);
+      expect(s.edges[edgeId]!.label, 'a lot');
+    });
+
+    test('createChildNode leaves nothing behind when refused', () async {
+      final sam = await g.createNode(label: 'Sam');
+      await expectLater(
+        g.createChildNode(
+          parentId: sam,
+          label: 'Sushi',
+          edgeTypeId: 'no-such-type',
+        ),
+        throwsA(isA<InvalidInput>()),
+      );
+      expect((await snap()).nodes.keys, [sam]);
+    });
+
+    test('moveEdge re-parents and keeps type and label', () async {
+      final sam = await g.createNode(label: 'Sam');
+      final priya = await g.createNode(label: 'Priya');
+      final (:nodeId, :edgeId) = await g.createChildNode(
+        parentId: sam,
+        label: 'Sushi',
+        edgeTypeId: SeedIds.loves,
+        edgeLabel: 'spicy rolls',
+      );
+      await g.moveEdge(edgeId, priya);
+      final edge = (await snap()).edges[edgeId]!;
+      expect((edge.sourceId, edge.targetId), (priya, nodeId));
+      expect((edge.typeId, edge.label), (SeedIds.loves, 'spicy rolls'));
+    });
+
+    test('moveEdge refuses to put a bubble under its own child', () async {
+      final sam = await g.createNode(label: 'Sam');
+      final (:nodeId, edgeId: _) = await g.createChildNode(
+        parentId: sam,
+        label: 'Coffee',
+        edgeTypeId: SeedIds.likes,
+      );
+      final (nodeId: _, :edgeId) = await g.createChildNode(
+        parentId: nodeId,
+        label: 'Latte',
+        edgeTypeId: SeedIds.likes,
+      );
+      // Drag Latte's line onto Latte itself → self-link; Coffee under Latte
+      // → loop.
+      final coffeeEdge = (await snap()).edges.values
+          .firstWhere((e) => e.targetId == nodeId)
+          .id;
+      final latte = (await snap()).edges[edgeId]!.targetId;
+      await expectLater(
+        g.moveEdge(coffeeEdge, latte),
+        throwsA(isA<CycleBlocked>()),
+      );
+    });
+
+    test('updateNode renames and retypes in one step', () async {
+      final id = await g.createNode(label: 'Sam');
+      await g.updateNode(id, label: 'Samantha', typeIds: [SeedIds.person]);
+      final node = (await snap()).nodes[id]!;
+      expect(node.label, 'Samantha');
+      expect(node.typeIds, [SeedIds.person]);
+    });
+
+    test('updateEdge clears an empty label', () async {
+      final sam = await g.createNode(label: 'Sam');
+      final (nodeId: _, :edgeId) = await g.createChildNode(
+        parentId: sam,
+        label: 'Tea',
+        edgeTypeId: SeedIds.likes,
+        edgeLabel: 'green',
+      );
+      await g.updateEdge(edgeId, typeId: SeedIds.dislikes, label: '  ');
+      final edge = (await snap()).edges[edgeId]!;
+      expect((edge.typeId, edge.label), (SeedIds.dislikes, null));
     });
   });
 
