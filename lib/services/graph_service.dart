@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:drift/drift.dart';
 
 import '../data/app_database.dart';
@@ -69,6 +71,22 @@ class GraphService {
           ),
         );
       });
+
+  /// Saves positions chosen by auto-placement, in one batch. Nodes that got
+  /// a position some other way in the meantime keep it.
+  Future<void> placeNodes(Map<String, Point<double>> positions) async {
+    if (positions.isEmpty) return;
+    final now = DateTime.now();
+    await _db.batch((b) {
+      for (final MapEntry(key: id, value: p) in positions.entries) {
+        b.update(
+          _db.nodes,
+          NodesCompanion(x: Value(p.x), y: Value(p.y), updatedAt: Value(now)),
+          where: (n) => n.id.equals(id) & n.x.isNull(),
+        );
+      }
+    });
+  }
 
   /// Saves a node's canvas position. Call on drag end, not every frame.
   Future<void> moveNode(String id, double x, double y) => _write((s) async {

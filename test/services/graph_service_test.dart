@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:drift/drift.dart' hide isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -243,6 +245,15 @@ void main() {
       final edge = (await snap()).edges[edgeId]!;
       expect((edge.typeId, edge.label), (SeedIds.dislikes, null));
     });
+  });
+
+  test('placeNodes fills unplaced nodes only', () async {
+    final a = await g.createNode(label: 'A');
+    final b = await g.createNode(label: 'B', x: 1, y: 2);
+    await g.placeNodes({a: const Point(10, 20), b: const Point(99, 99)});
+    final s = await snap();
+    expect((s.nodes[a]!.x, s.nodes[a]!.y), (10, 20));
+    expect((s.nodes[b]!.x, s.nodes[b]!.y), (1, 2), reason: 'kept');
   });
 
   group('delete', () {

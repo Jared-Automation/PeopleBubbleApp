@@ -30,10 +30,27 @@ Future<void> loadSampleData(GraphService g) async {
     style: const NodeStyle(outlineColor: 0xFF8E24AA),
   );
 
+  const likes = SeedIds.likes;
+  const loves = SeedIds.loves;
+  const dislikes = SeedIds.dislikes;
+  const related = SeedIds.related;
+
   Future<String> person(String label, [List<String> types = const []]) =>
       g.createNode(label: label, typeIds: [SeedIds.person, ...types]);
-  Future<String> thing(String label) =>
-      g.createNode(label: label, typeIds: [SeedIds.thing]);
+  // Each thing is created together with its first line, like the add sheet
+  // does, so the data is never in a half-linked state.
+  Future<String> thing(
+    String parent,
+    String type,
+    String label, [
+    String? lineLabel,
+  ]) async => (await g.createChildNode(
+    parentId: parent,
+    label: label,
+    typeIds: [SeedIds.thing],
+    edgeTypeId: type,
+    edgeLabel: lineLabel,
+  )).nodeId;
   Future<void> link(String from, String to, String type, [String? label]) =>
       g.createEdge(sourceId: from, targetId: to, typeId: type, label: label);
 
@@ -46,46 +63,27 @@ Future<void> loadSampleData(GraphService g) async {
   final rose = await person('Nana Rose', [family]);
   final theo = await person('Theo');
 
-  final sushi = await thing('Sushi');
-  final cilantro = await thing('Cilantro');
-  final coffee = await thing('Coffee');
-  final flatWhite = await thing('Oat milk flat white');
-  final boardGames = await thing('Board games');
-  final catan = await thing('Catan');
-  final wingspan = await thing('Wingspan');
-  final monopoly = await thing('Monopoly');
-  final hiking = await thing('Hiking');
-  final horror = await thing('Horror movies');
-  final sunflowers = await thing('Sunflowers');
-  final jazz = await thing('Jazz');
-  final spicy = await thing('Spicy food');
-
-  const likes = SeedIds.likes;
-  const loves = SeedIds.loves;
-  const dislikes = SeedIds.dislikes;
-  const related = SeedIds.related;
-
   // Shared things: one Sushi node under both Sam and Priya, and so on.
-  await link(sam, sushi, loves);
+  final sushi = await thing(sam, loves, 'Sushi');
   await link(priya, sushi, likes);
-  await link(sam, cilantro, dislikes);
+  final cilantro = await thing(sam, dislikes, 'Cilantro');
   await link(leo, cilantro, dislikes);
-  await link(sam, coffee, loves);
-  await link(coffee, flatWhite, likes, 'usually');
-  await link(sam, boardGames, likes);
+  final coffee = await thing(sam, loves, 'Coffee');
+  await thing(coffee, likes, 'Oat milk flat white', 'usually');
+  final boardGames = await thing(sam, likes, 'Board games');
   await link(priya, boardGames, likes);
   await link(leo, boardGames, loves);
-  await link(boardGames, catan, likes);
-  await link(boardGames, wingspan, loves);
-  await link(boardGames, monopoly, dislikes);
-  await link(alex, hiking, loves);
+  await thing(boardGames, likes, 'Catan');
+  await thing(boardGames, loves, 'Wingspan');
+  await thing(boardGames, dislikes, 'Monopoly');
+  final hiking = await thing(alex, loves, 'Hiking');
   await link(jordan, hiking, likes);
-  await link(jordan, horror, loves);
+  final horror = await thing(jordan, loves, 'Horror movies');
   await link(mia, horror, dislikes);
-  await link(rose, sunflowers, loves);
+  final sunflowers = await thing(rose, loves, 'Sunflowers');
   await link(mia, sunflowers, likes);
-  await link(theo, jazz, likes);
-  await link(priya, spicy, loves);
+  await thing(theo, likes, 'Jazz');
+  final spicy = await thing(priya, loves, 'Spicy food');
   await link(theo, spicy, dislikes);
 
   // Non-hierarchical links: shown as shadow rows in the list (Phase 3).
@@ -94,35 +92,44 @@ Future<void> loadSampleData(GraphService g) async {
   await link(sam, priya, related, 'best friends');
 }
 
-/// About [people] × (1 + [likesPerPerson]) nodes with shared things, for the
-/// performance check. Deterministic, so runs are comparable.
+/// [people] people with [thingsPerPerson] things each (300 bubbles by
+/// default), plus a couple of shared links per person, for the performance
+/// check. Deterministic, so runs are comparable.
 Future<void> loadLargeSample(
   GraphService g, {
   int people = 50,
-  int likesPerPerson = 5,
+  int thingsPerPerson = 5,
+  int sharedPerPerson = 2,
 }) async {
   await g.clearAllData();
   final random = Random(42);
-  final things = [
-    for (var i = 0; i < people * likesPerPerson; i++)
-      await g.createNode(label: 'Thing ${i + 1}', typeIds: [SeedIds.thing]),
-  ];
   const edgeTypes = [SeedIds.likes, SeedIds.loves, SeedIds.dislikes];
+  String anyType() => edgeTypes[random.nextInt(edgeTypes.length)];
+
+  final things = <String>[];
+  final ownThings = <String, Set<String>>{};
   for (var p = 0; p < people; p++) {
     final id = await g.createNode(
       label: 'Person ${p + 1}',
       typeIds: [SeedIds.person],
     );
-    final picked = <String>{};
-    while (picked.length < likesPerPerson) {
-      picked.add(things[random.nextInt(things.length)]);
-    }
-    for (final thing in picked) {
-      await g.createEdge(
-        sourceId: id,
-        targetId: thing,
-        typeId: edgeTypes[random.nextInt(edgeTypes.length)],
+    final mine = ownThings[id] = {};
+    for (var t = 0; t < thingsPerPerson; t++) {
+      final (:nodeId, edgeId: _) = await g.createChildNode(
+        parentId: id,
+        label: 'Thing ${things.length + 1}',
+        typeIds: [SeedIds.thing],
+        edgeTypeId: anyType(),
       );
+      things.add(nodeId);
+      mine.add(nodeId);
+    }
+    // Share a few things made by earlier people.
+    for (var s = 0; s < sharedPerPerson && things.length > mine.length; s++) {
+      final other = things[random.nextInt(things.length)];
+      if (mine.add(other)) {
+        await g.createEdge(sourceId: id, targetId: other, typeId: anyType());
+      }
     }
   }
 }

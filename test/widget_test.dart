@@ -10,6 +10,9 @@ void main() {
 
     await tester.tap(find.text('Bubbles'));
     await tester.pumpAndSettle();
-    expect(find.text('Bubble canvas coming in phase 4'), findsOneWidget);
+    expect(
+      find.text('Nothing here yet. Add people from the List.'),
+      findsOneWidget,
+    );
   });
 }
