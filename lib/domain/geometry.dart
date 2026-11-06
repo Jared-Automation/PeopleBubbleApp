@@ -104,3 +104,45 @@ double gapBetween(Rectangle<double> a, Rectangle<double> b) {
   final dy = max(0.0, max(a.top - b.bottom, b.top - a.bottom));
   return sqrt(dx * dx + dy * dy);
 }
+
+/// Distance from [p] to the segment [a]–[b].
+double distanceToSegment(Point<double> p, Point<double> a, Point<double> b) {
+  final dx = b.x - a.x, dy = b.y - a.y;
+  final lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared == 0) return p.distanceTo(a);
+  final t = (((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSquared).clamp(
+    0.0,
+    1.0,
+  );
+  return p.distanceTo(Point(a.x + t * dx, a.y + t * dy));
+}
+
+/// Spacing of the canvas dot grid, in world units; also the snap step.
+const gridSpacing = 40.0;
+
+/// [p] moved to the nearest grid point.
+Point<double> snapToGrid(Point<double> p, [double spacing = gridSpacing]) =>
+    Point(
+      (p.x / spacing).roundToDouble() * spacing,
+      (p.y / spacing).roundToDouble() * spacing,
+    );
+
+/// Whether [p] is inside [shape] drawn in [box].
+bool shapeContains(NodeShape shape, Rectangle<double> box, Point<double> p) {
+  if (!box.containsPoint(p)) return false;
+  final c = centerOf(box);
+  switch (shape) {
+    case NodeShape.rectangle:
+      return true;
+    case NodeShape.ellipse:
+    case NodeShape.circle:
+      final nx = (p.x - c.x) / (box.width / 2);
+      final ny = (p.y - c.y) / (box.height / 2);
+      return nx * nx + ny * ny <= 1;
+    case NodeShape.roundedRect:
+      final r = roundedCornerRadius(box);
+      final ix = (p.x - c.x).abs() - (box.width / 2 - r);
+      final iy = (p.y - c.y).abs() - (box.height / 2 - r);
+      return ix <= 0 || iy <= 0 || ix * ix + iy * iy <= r * r;
+  }
+}

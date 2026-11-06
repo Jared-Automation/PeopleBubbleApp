@@ -100,6 +100,35 @@ class GraphSnapshot {
   }
 }
 
+/// What to keep bright when something is selected: the item, its lines and
+/// the bubbles at their other ends (all line types, hierarchical or not).
+({Set<String> nodes, Set<String> edges}) neighborhoodOf(
+  GraphSnapshot snapshot, {
+  String? nodeId,
+  String? edgeId,
+}) {
+  final nodes = <String>{}, edges = <String>{};
+  if (nodeId != null) {
+    nodes.add(nodeId);
+    for (final e in snapshot.edges.values) {
+      if (e.sourceId == nodeId || e.targetId == nodeId) {
+        edges.add(e.id);
+        nodes
+          ..add(e.sourceId)
+          ..add(e.targetId);
+      }
+    }
+  }
+  final edge = edgeId == null ? null : snapshot.edges[edgeId];
+  if (edge != null) {
+    edges.add(edge.id);
+    nodes
+      ..add(edge.sourceId)
+      ..add(edge.targetId);
+  }
+  return (nodes: nodes, edges: edges);
+}
+
 /// Whether adding a hierarchical edge [parentId] → [childId] would form a loop,
 /// given the existing hierarchical [edges] as (parent, child) pairs.
 ///

@@ -92,6 +92,14 @@ use; it may go on the Play Store later, so keep it structured like a real app.
 - After **Add** the sheet stays open with the name cleared and focused, for quick runs.
 - The last-used line type persists across launches (`shared_preferences`).
 
+## Canvas-editing decisions (confirmed Nov 6, 2026)
+
+- Selecting a bubble highlights it, its lines and its direct neighbours and dims everything
+  else. **Configurable** (canvas settings menu), on by default.
+- Dragging moves just that bubble (subtree moves come with "select subtree" in Phase 6).
+- Double-tap edits the name only (types/styling via the wheel or the list's edit sheet).
+- Snap-to-grid while dragging is **configurable**, off by default.
+
 ## Project setup facts
 
 - Application ID: `com.jade.peoplebubble`. Dart package: `people_bubble`.

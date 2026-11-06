@@ -4,60 +4,119 @@ import 'package:flutter/rendering.dart';
 
 import '../../domain/geometry.dart';
 import '../../domain/graph.dart';
+import '../../domain/hit_test.dart';
 import '../../domain/style.dart';
 import 'canvas_layout_cache.dart';
+import 'canvas_scene.dart';
 
-/// Draws every placed bubble and the lines between them.
+/// Draws every placed bubble and the lines between them, from a
+/// [CanvasScene].
 ///
 /// Paints in world coordinates shifted by [origin], so world (0, 0) sits at
 /// [origin] inside the (very large) canvas child of the `InteractiveViewer`.
 class GraphPainter extends CustomPainter {
   GraphPainter({
-    required this.snapshot,
+    required this.scene,
     required this.cache,
     required this.origin,
     required this.labelBackground,
+    required this.highlight,
+    this.selection,
+    this.dimUnrelated = true,
   });
 
-  final GraphSnapshot snapshot;
+  final CanvasScene scene;
   final CanvasLayoutCache cache;
   final Offset origin;
 
   /// Behind line labels, so they stay readable over lines and the grid.
   final Color labelBackground;
 
+  /// Selection ring / glow colour.
+  final Color highlight;
+  final CanvasHit? selection;
+
+  /// Fade everything not connected to [selection].
+  final bool dimUnrelated;
+
+  GraphSnapshot get snapshot => scene.snapshot;
+
   @override
   void paint(Canvas canvas, Size size) {
     canvas.save();
     canvas.translate(origin.dx, origin.dy);
 
-    final boxes = <String, Rectangle<double>>{};
-    final styles = <String, NodeStyle>{};
-    for (final node in snapshot.nodes.values) {
-      if (!node.isPlaced) continue;
-      final style = snapshot.styleOf(node);
-      styles[node.id] = style;
-      boxes[node.id] = boxAt(
-        Point(node.x!, node.y!),
-        cache.node(node.label, style).size,
-      );
+    final selected = selection;
+    final focus = selected == null || !dimUnrelated
+        ? null
+        : neighborhoodOf(
+            snapshot,
+            nodeId: selected is NodeHit ? selected.id : null,
+            edgeId: selected is EdgeHit ? selected.id : null,
+          );
+    bool nodeBright(String id) => focus == null || focus.nodes.contains(id);
+    bool edgeBright(String id) => focus == null || focus.edges.contains(id);
+
+    // Dimmed items go into one translucent layer: far cheaper than fading
+    // hundreds of items one by one.
+    if (focus != null) {
+      canvas.saveLayer(null, Paint()..color = const Color(0x40000000));
+      for (final e in scene.edges) {
+        if (!edgeBright(e.edge.id)) _paintEdge(canvas, e.edge, e.from, e.to);
+      }
+      for (final n in scene.nodes.values) {
+        if (!nodeBright(n.node.id)) _paintNode(canvas, n.node, n.style, n.box);
+      }
+      canvas.restore();
     }
 
     // Lines first, so bubbles sit on top of them.
-    for (final edge in snapshot.edges.values) {
-      final a = boxes[edge.sourceId], b = boxes[edge.targetId];
-      if (a == null || b == null) continue;
-      _paintEdge(
-        canvas,
-        edge,
-        borderPoint(styles[edge.sourceId]!.shape!, a, centerOf(b)),
-        borderPoint(styles[edge.targetId]!.shape!, b, centerOf(a)),
-      );
+    for (final e in scene.edges) {
+      if (!edgeBright(e.edge.id)) continue;
+      if (selected is EdgeHit && selected.id == e.edge.id) {
+        _paintEdgeGlow(canvas, e.edge, e.from, e.to);
+      }
+      _paintEdge(canvas, e.edge, e.from, e.to);
     }
-    for (final MapEntry(key: id, value: box) in boxes.entries) {
-      _paintNode(canvas, snapshot.nodes[id]!, styles[id]!, box);
+    for (final n in scene.nodes.values) {
+      if (!nodeBright(n.node.id)) continue;
+      _paintNode(canvas, n.node, n.style, n.box);
+      if (selected is NodeHit && selected.id == n.node.id) {
+        _paintSelectionRing(canvas, n.style, n.box);
+      }
     }
     canvas.restore();
+  }
+
+  void _paintEdgeGlow(
+    Canvas canvas,
+    GraphEdge edge,
+    Point<double> from,
+    Point<double> to,
+  ) {
+    canvas.drawLine(
+      Offset(from.x, from.y),
+      Offset(to.x, to.y),
+      Paint()
+        ..color = highlight.withValues(alpha: 0.35)
+        ..strokeWidth = snapshot.edgeStyleOf(edge).width! + 10
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  void _paintSelectionRing(
+    Canvas canvas,
+    NodeStyle style,
+    Rectangle<double> box,
+  ) {
+    const gap = 5.0;
+    canvas.drawPath(
+      _shapePath(style.shape!, inflate(box, gap)),
+      Paint()
+        ..color = highlight
+        ..strokeWidth = 3
+        ..style = PaintingStyle.stroke,
+    );
   }
 
   void _paintEdge(
@@ -127,17 +186,7 @@ class GraphPainter extends CustomPainter {
     Rectangle<double> box,
   ) {
     final rect = Rect.fromLTWH(box.left, box.top, box.width, box.height);
-    final shape = switch (style.shape!) {
-      NodeShape.roundedRect =>
-        Path()..addRRect(
-          RRect.fromRectAndRadius(
-            rect,
-            Radius.circular(roundedCornerRadius(box)),
-          ),
-        ),
-      NodeShape.rectangle => Path()..addRect(rect),
-      NodeShape.ellipse || NodeShape.circle => Path()..addOval(rect),
-    };
+    final shape = _shapePath(style.shape!, box);
     canvas.drawPath(shape, Paint()..color = Color(style.fillColor!));
     final outlineWidth = style.outlineWidth!;
     if (outlineWidth > 0) {
@@ -156,9 +205,28 @@ class GraphPainter extends CustomPainter {
     text.paint(canvas, rect.center - Offset(text.width / 2, text.height / 2));
   }
 
+  Path _shapePath(NodeShape shape, Rectangle<double> box) {
+    final rect = Rect.fromLTWH(box.left, box.top, box.width, box.height);
+    return switch (shape) {
+      NodeShape.roundedRect =>
+        Path()..addRRect(
+          RRect.fromRectAndRadius(
+            rect,
+            Radius.circular(roundedCornerRadius(box)),
+          ),
+        ),
+      NodeShape.rectangle => Path()..addRect(rect),
+      NodeShape.ellipse || NodeShape.circle => Path()..addOval(rect),
+    };
+  }
+
   @override
   bool shouldRepaint(GraphPainter old) =>
-      old.snapshot != snapshot || old.labelBackground != labelBackground;
+      old.scene != scene ||
+      old.selection != selection ||
+      old.dimUnrelated != dimUnrelated ||
+      old.labelBackground != labelBackground ||
+      old.highlight != highlight;
 }
 
 /// [source] broken into dashes or dots. `Canvas` has no dash support, so

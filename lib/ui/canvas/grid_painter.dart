@@ -2,6 +2,8 @@ import 'dart:ui';
 
 import 'package:flutter/widgets.dart';
 
+import '../../domain/geometry.dart';
+
 /// A faint dot grid behind the canvas, in screen space. Repaints whenever the
 /// pan/zoom changes, and fades out when zoomed far out (where it would just
 /// be noise and thousands of dots).
@@ -11,7 +13,7 @@ class GridPainter extends CustomPainter {
   final TransformationController transform;
   final Color color;
 
-  static const _worldSpacing = 40.0, _minSpacing = 14.0;
+  static const _worldSpacing = gridSpacing, _minSpacing = 14.0;
 
   @override
   void paint(Canvas canvas, Size size) {
