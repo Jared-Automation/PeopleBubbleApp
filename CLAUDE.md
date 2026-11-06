@@ -65,6 +65,20 @@ use; it may go on the Play Store later, so keep it structured like a real app.
 - Shared subtrees show in full under every parent, collapsed after the first appearance.
 - Seeded `Loves` is a subtype of `Likes`.
 
+## Data-model decisions (confirmed Nov 6, 2026)
+
+- IDs are UUID v4 strings. Built-in seed rows use fixed, readable IDs (e.g. `node-type-person`)
+  so they match across devices on import.
+- Style fields are stored as one JSON text column per row (types and per-item overrides),
+  mapped to typed `NodeStyle` / `EdgeStyle` classes by a drift `TypeConverter`.
+- Conflict check compares only the fields a type sets itself or through its ancestors,
+  **excluding the base type's defaults**. (Otherwise every type would conflict with Partner.)
+  A type and its own ancestor never conflict; the ancestor is dropped as redundant.
+- Built-in base types `Node` and `Edge` are the roots of the two type trees, hold the default
+  style, and can't be deleted. Base `Edge` has `hierarchical = true`; the flag is inherited.
+- Node `x`/`y` are nullable: null means "not placed yet"; the canvas places it on first show.
+- Every row has `createdAt` / `updatedAt`.
+
 ## Project setup facts
 
 - Application ID: `com.jade.peoplebubble`. Dart package: `people_bubble`.

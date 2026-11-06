@@ -1,0 +1,13 @@
+targets:
+  $default:
+    builders:
+      drift_dev:
+        options:
+          # ISO-8601 text dates read better in JSON exports than unix ints.
+          store_date_time_values_as_text: true
+          # Used by `dart run drift_dev make-migrations` to snapshot each schema
+          # version and generate migration steps and tests.
+          databases:
+            default: lib/data/app_database.dart
+          schema_dir: drift_schemas/
+          test_dir: test/drift/
