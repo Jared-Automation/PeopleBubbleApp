@@ -17,6 +17,21 @@ final canvasSelectionProvider =
       CanvasSelectionNotifier.new,
     );
 
+/// A multi-bubble selection made by "Select subtree". Dragging any member
+/// moves them all. Empty when there's no group.
+class CanvasGroupNotifier extends Notifier<Set<String>> {
+  @override
+  Set<String> build() => const {};
+
+  void set(Set<String> ids) => state = Set.unmodifiable(ids);
+
+  void clear() => state = const {};
+}
+
+final canvasGroupProvider = NotifierProvider<CanvasGroupNotifier, Set<String>>(
+  CanvasGroupNotifier.new,
+);
+
 class CanvasSettings {
   const CanvasSettings({required this.dimUnrelated, required this.snapToGrid});
 

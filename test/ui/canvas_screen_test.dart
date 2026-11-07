@@ -42,7 +42,6 @@ void main() {
       }
     }
 
-    await tester.tap(find.text('Bubbles'));
     await app.settle();
     final painter = tester
         .widgetList<CustomPaint>(find.byType(CustomPaint))
@@ -64,7 +63,6 @@ void main() {
     tester.view.devicePixelRatio = 2.625;
     await tester.pump(const Duration(milliseconds: 500));
     await app.settle();
-    await tester.tap(find.text('Bubbles'));
     await app.settle();
     await tester.tap(find.byTooltip('Zoom to fit'));
     await app.settle();

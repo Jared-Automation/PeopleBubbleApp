@@ -10,7 +10,7 @@ void main() {
   testWidgets('shows people first, with line chips and shared markers', (
     tester,
   ) async {
-    await AppHarness.start(tester, seed: loadSampleData);
+    await AppHarness.start(tester, startOnList: true, seed: loadSampleData);
 
     final labels = tester
         .widgetList<Text>(find.byType(Text))
@@ -29,6 +29,7 @@ void main() {
   ) async {
     final app = await AppHarness.start(
       tester,
+      startOnList: true,
       seed: (g) => g.createNode(label: 'Sam', typeIds: [SeedIds.person]),
     );
 
@@ -61,6 +62,7 @@ void main() {
   testWidgets('greys out a conflicting type with the reason', (tester) async {
     await AppHarness.start(
       tester,
+      startOnList: true,
       seed: (g) async {
         await g.createNodeType(
           name: 'Partner',
@@ -95,7 +97,7 @@ void main() {
   testWidgets('add sheet fits a phone screen with the keyboard open', (
     tester,
   ) async {
-    await AppHarness.start(tester, seed: loadSampleData);
+    await AppHarness.start(tester, startOnList: true, seed: loadSampleData);
     // Galaxy S24-ish: 1080x2340 px at 2.625x, keyboard ~ 40% of the height.
     tester.view.physicalSize = const Size(1080, 2340);
     tester.view.devicePixelRatio = 2.625;

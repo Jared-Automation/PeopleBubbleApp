@@ -9,6 +9,7 @@ import '../../data/providers.dart';
 import '../../domain/graph.dart';
 import '../../domain/list_tree.dart';
 import '../../services/sample_data.dart';
+import '../common/confirm_delete.dart';
 import '../common/type_pickers.dart';
 import 'add_sheet.dart';
 import 'edit_sheet.dart';
@@ -77,7 +78,7 @@ class _ListScreenState extends ConsumerState<ListScreen> {
           showEditSheet(context, nodeId: row.nodeId, edgeId: row.viaEdgeId),
       onUnlink: (row) =>
           _run(() => ref.read(graphServiceProvider).deleteEdge(row.viaEdgeId!)),
-      onDelete: (row) => _confirmDelete(snapshot, row.nodeId),
+      onDelete: (row) => confirmAndDeleteNode(context, ref, row.nodeId),
       onDrop: _drop,
       onDragStart: _startAutoScroll,
       onDragUpdate: (pos) => _dragY = pos.dy,
@@ -171,37 +172,6 @@ class _ListScreenState extends ConsumerState<ListScreen> {
         ),
       ),
     );
-  }
-
-  Future<void> _confirmDelete(GraphSnapshot snapshot, String nodeId) async {
-    final label = snapshot.nodes[nodeId]!.label;
-    final lines = snapshot.edges.values
-        .where((e) => e.sourceId == nodeId || e.targetId == nodeId)
-        .length;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text('Delete “$label”?'),
-        content: Text(
-          'This removes it everywhere it appears'
-          '${lines == 0 ? '' : ', along with its $lines ${lines == 1 ? 'line' : 'lines'}'}. '
-          'Bubbles under it stay; any left without a parent move to the top.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-    if (ok ?? false) {
-      await _run(() => ref.read(graphServiceProvider).deleteNode(nodeId));
-    }
   }
 
   /// A row dropped onto another: move its line under the target, or give a

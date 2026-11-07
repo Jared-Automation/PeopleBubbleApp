@@ -100,6 +100,18 @@ use; it may go on the Play Store later, so keep it structured like a real app.
 - Double-tap edits the name only (types/styling via the wheel or the list's edit sheet).
 - Snap-to-grid while dragging is **configurable**, off by default.
 
+## Radial-wheel decisions (confirmed Nov 7, 2026)
+
+- **Focus** selects the bubble and zooms to it and its direct connections (dimming per the
+  canvas setting). No separate filter mode.
+- **Paste** (empty-canvas wheel) makes new bubbles from the clipboard's text, one per line, at
+  the pressed spot.
+- **New bubble here** defaults to type Person, like the list's "Add person".
+- Slices for later phases (Add waypoint → Phase 7, Style overrides → Phase 8) show greyed out
+  with "coming soon", so slice positions never shift.
+- The app opens on **Bubbles** from Phase 6 on.
+- Select subtree makes a group; dragging any member moves the whole group (one write).
+
 ## Project setup facts
 
 - Application ID: `com.jade.peoplebubble`. Dart package: `people_bubble`.

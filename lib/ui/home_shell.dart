@@ -12,7 +12,8 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> {
-  int _index = 0;
+  // The canvas is the main view; the list is one tap away.
+  int _index = 1;
 
   @override
   Widget build(BuildContext context) {

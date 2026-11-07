@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -9,20 +11,37 @@ import '../common/type_pickers.dart';
 import 'list_state.dart';
 
 /// Opens the add sheet: under [parentId], or a new top-level person if null.
-Future<void> showAddSheet(BuildContext context, {required String? parentId}) =>
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (_) => AddSheet(parentId: parentId),
-    );
+/// [existingTab] opens on "Existing". A top-level bubble goes at [position]
+/// (world coordinates) if given, otherwise it's auto-placed.
+Future<void> showAddSheet(
+  BuildContext context, {
+  required String? parentId,
+  bool existingTab = false,
+  Point<double>? position,
+}) => showModalBottomSheet<void>(
+  context: context,
+  isScrollControlled: true,
+  showDragHandle: true,
+  builder: (_) => AddSheet(
+    parentId: parentId,
+    existingTab: existingTab,
+    position: position,
+  ),
+);
 
 /// Two tabs: **New** makes a bubble (and its line), **Existing** links one
 /// that's already there. The sheet stays open after each add for quick runs.
 class AddSheet extends ConsumerStatefulWidget {
-  const AddSheet({super.key, required this.parentId});
+  const AddSheet({
+    super.key,
+    required this.parentId,
+    this.existingTab = false,
+    this.position,
+  });
 
   final String? parentId;
+  final bool existingTab;
+  final Point<double>? position;
 
   @override
   ConsumerState<AddSheet> createState() => _AddSheetState();
@@ -42,6 +61,10 @@ class _AddSheetState extends ConsumerState<AddSheet> {
   bool _messageIsError = false;
 
   bool get _hasParent => widget.parentId != null;
+
+  /// Top-level bubbles added at a spot so far, so a quick run stacks them
+  /// downward instead of on top of each other.
+  int _addedAtPosition = 0;
 
   @override
   void dispose() {
@@ -90,6 +113,7 @@ class _AddSheetState extends ConsumerState<AddSheet> {
                 )
               : DefaultTabController(
                   length: 2,
+                  initialIndex: widget.existingTab ? 1 : 0,
                   child: SizedBox(
                     height: maxHeight,
                     child: Column(
@@ -283,7 +307,14 @@ class _AddSheetState extends ConsumerState<AddSheet> {
         );
         ref.read(lastEdgeTypeProvider.notifier).set(_edgeType);
       } else {
-        await service.createNode(label: label, typeIds: _types);
+        final at = widget.position;
+        await service.createNode(
+          label: label,
+          typeIds: _types,
+          x: at?.x,
+          y: at == null ? null : at.y + 80.0 * _addedAtPosition,
+        );
+        if (at != null) _addedAtPosition++;
       }
       _label.clear();
       return 'Added “$label”';

@@ -3,19 +3,27 @@ import 'dart:math';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/providers.dart';
+import '../../data/seed.dart';
 import '../../domain/geometry.dart';
 import '../../domain/graph.dart';
 import '../../domain/hit_test.dart';
 import '../../domain/placement.dart';
+import '../../domain/radial_menu.dart';
+import '../common/confirm_delete.dart';
+import '../common/line_sheet.dart';
 import '../common/type_pickers.dart';
+import '../list/add_sheet.dart';
+import '../list/edit_sheet.dart';
 import 'canvas_layout_cache.dart';
 import 'canvas_scene.dart';
 import 'canvas_state.dart';
 import 'graph_painter.dart';
 import 'grid_painter.dart';
+import 'radial_wheel.dart';
 import 'rename_dialog.dart';
 
 /// World (0, 0) sits in the middle of a huge canvas child, so the world can
@@ -35,7 +43,7 @@ class _Press {
     required this.time,
     required this.hit,
     required this.world,
-    required this.nodeStart,
+    required this.starts,
   });
 
   final int pointer;
@@ -45,9 +53,39 @@ class _Press {
   final Duration time;
   final CanvasHit? hit;
 
-  /// World position under the finger, and the touched bubble's centre.
+  /// World position under the finger.
   final Point<double> world;
-  final Point<double>? nodeStart;
+
+  /// Centres of the bubbles a drag would move: the touched bubble, or its
+  /// whole group if it's part of a selected subtree.
+  final Map<String, Point<double>> starts;
+}
+
+/// An open radial wheel.
+class _Wheel {
+  _Wheel({
+    required this.center,
+    required this.title,
+    required this.items,
+    required this.pointer,
+    required this.opened,
+  });
+
+  final Offset center;
+
+  /// Where the finger was when the wheel opened. Near a screen edge the
+  /// wheel is pushed inward, so this isn't [center]; the finger has to slide
+  /// away from here before it picks anything.
+  final Offset opened;
+  bool slid = false;
+  final String title;
+  final List<WheelItem> items;
+
+  /// The finger that opened it, while it's still down ("slide and lift");
+  /// null once lifted, when the wheel waits for a tap instead.
+  int? pointer;
+  WheelSlot? hovered;
+  bool moreOpen = false;
 }
 
 /// The bubble canvas: drawn from saved positions, with pan and pinch-zoom,
@@ -110,6 +148,12 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
   static const _doubleTapTime = Duration(milliseconds: 300);
   static const _tapMaxTime = Duration(milliseconds: 500);
 
+  // ---- radial wheel
+  Timer? _longPress;
+  _Wheel? _wheel;
+  static const _longPressTime = Duration(milliseconds: 450);
+  static const _wheelGeometry = RadialGeometry();
+
   /// Live bubble positions that win over the saved ones: the bubble being
   /// dragged, and a dropped bubble until its saved position arrives.
   final _overrides = <String, Point<double>>{};
@@ -118,6 +162,7 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
   void dispose() {
     _placeDebounce?.cancel();
     _edgePan?.cancel();
+    _longPress?.cancel();
     _viewAnimation.dispose();
     _transform.dispose();
     _cache.dispose();
@@ -128,6 +173,20 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
   Widget build(BuildContext context) {
     final snapshot = ref.watch(graphSnapshotProvider);
     final settings = ref.watch(canvasSettingsProvider);
+    return PopScope(
+      // Back closes an open wheel instead of leaving the screen.
+      canPop: _wheel == null,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _closeWheel();
+      },
+      child: _scaffold(snapshot, settings),
+    );
+  }
+
+  Widget _scaffold(
+    AsyncValue<GraphSnapshot> snapshot,
+    CanvasSettings settings,
+  ) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Bubbles'),
@@ -158,7 +217,7 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
     // A dropped bubble's override is no longer needed once the saved
     // position has arrived (or the bubble is gone).
     _overrides.removeWhere((id, p) {
-      if (_dragging && (_press?.hit as NodeHit?)?.id == id) return false;
+      if (_dragging && (_press?.starts.containsKey(id) ?? false)) return false;
       final node = snapshot.nodes[id];
       return node == null || (node.x == p.x && node.y == p.y);
     });
@@ -219,11 +278,24 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
                         highlight: colors.primary,
                         selection: selection,
                         dimUnrelated: settings.dimUnrelated,
+                        group: ref.watch(canvasGroupProvider),
                       ),
                     ),
                   ),
                 ),
               ),
+              if (_wheel case final wheel?)
+                Positioned.fill(
+                  child: RadialWheel(
+                    center: wheel.center,
+                    title: wheel.title,
+                    items: wheel.items,
+                    hovered: wheel.hovered,
+                    moreOpen: wheel.moreOpen,
+                    geometry: _wheelGeometry,
+                    onTap: (slot) => _chooseSlot(slot, lifted: false),
+                  ),
+                ),
             ],
           ),
         );
@@ -260,6 +332,8 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
   void _onPointerDown(PointerDownEvent e) {
     _pointers.add(e.pointer);
     _viewAnimation.stop();
+    // While a wheel is held open by a finger, other fingers do nothing.
+    if (_wheel?.pointer != null) return;
     if (_pointers.length > 1) {
       // A second finger: this is a pinch, not a drag or tap.
       _cancelPress();
@@ -267,23 +341,50 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
     }
     final world = _toWorld(e.localPosition);
     final hit = _scene?.hitAt(world, scale: _scale);
-    _press = _Press(
+    final press = _press = _Press(
       pointer: e.pointer,
       start: e.localPosition,
       time: e.timeStamp,
       hit: hit,
       world: world,
-      nodeStart: hit is NodeHit ? centerOf(_scene!.nodes[hit.id]!.box) : null,
+      starts: hit is NodeHit ? _dragStarts(hit.id) : const {},
     );
     if (hit is NodeHit) {
       _frozenView = _transform.value.clone();
       setState(() => _panEnabled = false);
     }
+    _longPress?.cancel();
+    _longPress = Timer(_longPressTime, () => _openWheel(press));
+  }
+
+  /// Centres of what a drag starting on [id] moves: its group, or just it.
+  Map<String, Point<double>> _dragStarts(String id) {
+    final scene = _scene!;
+    final group = ref.read(canvasGroupProvider);
+    final ids = group.contains(id) ? group : {id};
+    return {
+      for (final g in ids)
+        if (scene.nodes[g] case final n?) g: centerOf(n.box),
+    };
   }
 
   void _onPointerMove(PointerMoveEvent e) {
+    final wheel = _wheel;
+    if (wheel != null) {
+      if (e.pointer != wheel.pointer) return;
+      if (!wheel.slid &&
+          (e.localPosition - wheel.opened).distance < kTouchSlop) {
+        return;
+      }
+      wheel.slid = true;
+      _hoverWheel(wheel, e.localPosition);
+      return;
+    }
     final press = _press;
     if (press == null || e.pointer != press.pointer) return;
+    if ((e.localPosition - press.start).distance >= kTouchSlop) {
+      _longPress?.cancel();
+    }
     if (!_dragging) {
       if (press.hit is! NodeHit) return;
       if ((e.localPosition - press.start).distance < kTouchSlop) return;
@@ -296,6 +397,16 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
 
   void _onPointerUp(PointerUpEvent e) {
     _pointers.remove(e.pointer);
+    _longPress?.cancel();
+    final wheel = _wheel;
+    if (wheel != null && e.pointer == wheel.pointer) {
+      // Lifted: choose the slot under the finger, or stay open for a tap.
+      _press = null;
+      wheel.pointer = null;
+      _chooseSlot(wheel.hovered, lifted: true);
+      _endTouch();
+      return;
+    }
     final press = _press;
     if (press != null && e.pointer == press.pointer) {
       _press = null;
@@ -311,6 +422,8 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
 
   void _onPointerCancel(PointerCancelEvent e) {
     _pointers.remove(e.pointer);
+    _longPress?.cancel();
+    if (e.pointer == _wheel?.pointer) _closeWheel();
     if (e.pointer == _press?.pointer) _cancelPress();
     _endTouch();
   }
@@ -323,8 +436,8 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
 
   /// Abandons the current touch: a dragged bubble snaps back.
   void _cancelPress() {
-    final hit = _press?.hit;
-    if (_dragging && hit is NodeHit) _overrides.remove(hit.id);
+    _longPress?.cancel();
+    if (_dragging) _press?.starts.keys.forEach(_overrides.remove);
     _dragging = false;
     _press = null;
     _lastTapTime = null;
@@ -337,11 +450,11 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
     final press = _press, local = _dragLocal;
     if (press == null || local == null) return;
     final world = _toWorld(local);
+    final dx = world.x - press.world.x, dy = world.y - press.world.y;
     setState(() {
-      _overrides[(press.hit! as NodeHit).id] = Point(
-        press.nodeStart!.x + world.x - press.world.x,
-        press.nodeStart!.y + world.y - press.world.y,
-      );
+      for (final MapEntry(key: id, value: start) in press.starts.entries) {
+        _overrides[id] = Point(start.x + dx, start.y + dy);
+      }
     });
   }
 
@@ -349,18 +462,30 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
     final id = (press.hit! as NodeHit).id;
     _dragging = false;
     _stopEdgePan();
-    var p = _overrides[id];
-    if (p == null) return;
-    if (ref.read(canvasSettingsProvider).snapToGrid) {
-      p = snapToGrid(p);
-      setState(() => _overrides[id] = p!);
-    }
+    final dropped = _overrides[id];
+    if (dropped == null) return;
+    // Snap the touched bubble; the rest of a group keeps its shape.
+    final snapped = ref.read(canvasSettingsProvider).snapToGrid
+        ? snapToGrid(dropped)
+        : dropped;
+    final start = press.starts[id]!;
+    final dx = snapped.x - start.x, dy = snapped.y - start.y;
+    final positions = {
+      for (final MapEntry(key: g, value: s) in press.starts.entries)
+        g: Point(s.x + dx, s.y + dy),
+    };
+    setState(() => _overrides.addAll(positions));
     // One write per drag, on release.
     try {
-      await ref.read(graphServiceProvider).moveNode(id, p.x, p.y);
+      final service = ref.read(graphServiceProvider);
+      if (positions.length == 1) {
+        await service.moveNode(id, snapped.x, snapped.y);
+      } else {
+        await service.moveNodes(positions);
+      }
     } catch (e) {
       if (!mounted) return;
-      setState(() => _overrides.remove(id));
+      setState(() => positions.keys.forEach(_overrides.remove));
       showGraphError(context, e);
     }
   }
@@ -386,7 +511,291 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
     }
     _lastTapTime = time;
     _lastTapPosition = press.start;
+    ref.read(canvasGroupProvider.notifier).clear();
     ref.read(canvasSelectionProvider.notifier).select(press.hit);
+  }
+
+  // ------------------------------------------------------------ wheel
+
+  void _openWheel(_Press press) {
+    final view = _viewSize;
+    final snapshot = ref.read(graphSnapshotProvider).value;
+    if (!mounted || view == null || snapshot == null || _dragging) return;
+    final (title, items) = switch (press.hit) {
+      NodeHit(:final id) => (snapshot.nodes[id]?.label ?? '', _nodeItems(id)),
+      EdgeHit(:final id) => (_edgeTitle(snapshot, id), _edgeItems(id)),
+      null => ('', _canvasItems(press.world)),
+    };
+    final hasMore = items.any((i) => i.isMore);
+    final c = RadialGeometry.clampCenter(
+      Point(press.start.dx, press.start.dy),
+      radius: hasMore ? _wheelGeometry.outerRadius : _wheelGeometry.innerRadius,
+      width: view.width,
+      height: view.height,
+    );
+    HapticFeedback.mediumImpact();
+    if (press.hit case final hit?) {
+      if (hit is! NodeHit || !ref.read(canvasGroupProvider).contains(hit.id)) {
+        ref.read(canvasGroupProvider.notifier).clear();
+      }
+      ref.read(canvasSelectionProvider.notifier).select(hit);
+    }
+    _frozenView = _transform.value.clone();
+    setState(() {
+      _panEnabled = false;
+      _wheel = _Wheel(
+        center: Offset(c.x, c.y),
+        title: title,
+        items: items,
+        pointer: press.pointer,
+        opened: press.start,
+      );
+    });
+  }
+
+  String _edgeTitle(GraphSnapshot s, String id) {
+    final e = s.edges[id];
+    if (e == null) return '';
+    return '${s.nodes[e.sourceId]?.label} → ${s.nodes[e.targetId]?.label}';
+  }
+
+  void _hoverWheel(_Wheel wheel, Offset local) {
+    final d = local - wheel.center;
+    final moreIndex = wheel.items.indexWhere((i) => i.isMore);
+    final slot = _wheelGeometry.slotAt(
+      d.dx,
+      d.dy,
+      innerCount: wheel.items.length,
+      outerCount: wheel.moreOpen ? wheel.items[moreIndex].more!.length : null,
+      moreIndex: wheel.moreOpen ? moreIndex : null,
+    );
+    if (slot == wheel.hovered) return;
+    HapticFeedback.selectionClick();
+    setState(() {
+      wheel.hovered = slot;
+      // Sliding onto More opens its ring right away.
+      if (slot == (ring: 0, index: moreIndex)) wheel.moreOpen = true;
+    });
+  }
+
+  /// Acts on [slot]. [lifted] is true when a sliding finger let go: then the
+  /// centre (or More, or a disabled slice) keeps the wheel open for a tap.
+  void _chooseSlot(WheelSlot? slot, {required bool lifted}) {
+    final wheel = _wheel;
+    if (wheel == null) return;
+    if (slot == null) {
+      lifted ? setState(() => wheel.hovered = null) : _closeWheel();
+      return;
+    }
+    final item = slot.ring == 0
+        ? wheel.items[slot.index]
+        : wheel.items.firstWhere((i) => i.isMore).more![slot.index];
+    if (item.isMore) {
+      setState(() {
+        wheel.moreOpen = true;
+        wheel.hovered = null;
+      });
+      return;
+    }
+    if (item.comingSoon) {
+      _closeWheel();
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text('${item.label} is coming in a later phase.')),
+        );
+      return;
+    }
+    final action = item.onSelected;
+    if (action == null) return;
+    _closeWheel();
+    action();
+  }
+
+  void _closeWheel() {
+    if (_wheel == null) return;
+    setState(() => _wheel = null);
+    _endTouch();
+  }
+
+  List<WheelItem> _nodeItems(String id) => [
+    WheelItem(
+      label: 'Add child',
+      icon: Icons.add_circle_outline,
+      onSelected: () => showAddSheet(context, parentId: id),
+    ),
+    WheelItem(
+      label: 'Link',
+      icon: Icons.add_link,
+      onSelected: () => showAddSheet(context, parentId: id, existingTab: true),
+    ),
+    WheelItem(
+      label: 'Rename',
+      icon: Icons.edit_outlined,
+      onSelected: () => _renameNode(id),
+    ),
+    WheelItem(
+      label: 'Types',
+      icon: Icons.category_outlined,
+      onSelected: () => showEditSheet(context, nodeId: id),
+    ),
+    WheelItem(
+      label: 'Delete',
+      icon: Icons.delete_outline,
+      onSelected: () => confirmAndDeleteNode(context, ref, id),
+    ),
+    WheelItem(
+      label: 'More',
+      icon: Icons.more_horiz,
+      more: [
+        const WheelItem(
+          label: 'Style',
+          icon: Icons.palette_outlined,
+          comingSoon: true,
+        ),
+        WheelItem(
+          label: 'Subtree',
+          icon: Icons.account_tree_outlined,
+          onSelected: () => _selectSubtree(id),
+        ),
+        WheelItem(
+          label: 'Focus',
+          icon: Icons.center_focus_strong_outlined,
+          onSelected: () => _focus(id),
+        ),
+      ],
+    ),
+  ];
+
+  List<WheelItem> _edgeItems(String id) => [
+    WheelItem(
+      label: 'Type',
+      icon: Icons.category_outlined,
+      onSelected: () => showLineSheet(context, edgeId: id),
+    ),
+    WheelItem(
+      label: 'Label',
+      icon: Icons.label_outline,
+      onSelected: () => _renameEdge(id),
+    ),
+    const WheelItem(label: 'Waypoint', icon: Icons.commit, comingSoon: true),
+    WheelItem(
+      label: 'Delete',
+      icon: Icons.delete_outline,
+      onSelected: () => _deleteEdge(id),
+    ),
+    WheelItem(
+      label: 'More',
+      icon: Icons.more_horiz,
+      more: [
+        const WheelItem(
+          label: 'Style',
+          icon: Icons.palette_outlined,
+          comingSoon: true,
+        ),
+        WheelItem(
+          label: 'Reverse',
+          icon: Icons.swap_vert,
+          onSelected: () =>
+              _run(() => ref.read(graphServiceProvider).reverseEdge(id)),
+        ),
+      ],
+    ),
+  ];
+
+  List<WheelItem> _canvasItems(Point<double> world) => [
+    WheelItem(
+      label: 'New here',
+      icon: Icons.add,
+      onSelected: () => showAddSheet(context, parentId: null, position: world),
+    ),
+    WheelItem(
+      label: 'Paste',
+      icon: Icons.content_paste,
+      onSelected: () => _paste(world),
+    ),
+    WheelItem(
+      label: 'Fit',
+      icon: Icons.fit_screen,
+      onSelected: () => _fit(animate: true),
+    ),
+  ];
+
+  /// Selects [id] and everything under it as a group that drags together.
+  void _selectSubtree(String id) {
+    final snapshot = ref.read(graphSnapshotProvider).value;
+    if (snapshot == null) return;
+    ref.read(canvasGroupProvider.notifier).set(subtreeOf(snapshot, id));
+    ref.read(canvasSelectionProvider.notifier).select(NodeHit(id));
+  }
+
+  /// Selects [id] and zooms to it and its direct connections.
+  void _focus(String id) {
+    final snapshot = ref.read(graphSnapshotProvider).value;
+    final scene = _scene;
+    if (snapshot == null || scene == null) return;
+    ref.read(canvasGroupProvider.notifier).clear();
+    ref.read(canvasSelectionProvider.notifier).select(NodeHit(id));
+    final near = neighborhoodOf(snapshot, nodeId: id).nodes;
+    _fitTo(
+      boundsOf([
+        for (final n in near)
+          if (scene.nodes[n] case final sn?) sn.box,
+      ]),
+      animate: true,
+    );
+  }
+
+  Future<void> _deleteEdge(String id) async {
+    await _run(() => ref.read(graphServiceProvider).deleteEdge(id));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Line deleted')));
+  }
+
+  /// New bubbles from the clipboard's text, one per line, stacked at [at].
+  Future<void> _paste(Point<double> at) async {
+    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '';
+    final names = [
+      for (final line in text.split('\n'))
+        if (line.trim().isNotEmpty) line.trim(),
+    ].take(50).toList();
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context)..hideCurrentSnackBar();
+    if (names.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Nothing to paste: no text copied.')),
+      );
+      return;
+    }
+    final service = ref.read(graphServiceProvider);
+    await _run(() async {
+      for (final (i, name) in names.indexed) {
+        await service.createNode(
+          label: name,
+          typeIds: [SeedIds.person],
+          x: at.x,
+          y: at.y + 80.0 * i,
+        );
+      }
+    });
+    if (!mounted) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          'Added ${names.length} ${names.length == 1 ? 'bubble' : 'bubbles'}',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _run(Future<void> Function() write) async {
+    try {
+      await write();
+    } catch (e) {
+      if (mounted) showGraphError(context, e);
+    }
   }
 
   /// While dragging near a screen edge, pans the canvas so the bubble can be
@@ -552,11 +961,13 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
 
   /// Zooms and pans so every placed bubble is on screen (an empty canvas is
   /// centred on world 0, 0).
-  void _fit({required bool animate}) {
+  void _fit({required bool animate}) =>
+      _fitTo(_scene?.bounds, animate: animate);
+
+  /// Zooms and pans so [bounds] (world) fills the screen, at most 1.5×.
+  void _fitTo(Rectangle<double>? bounds, {required bool animate}) {
     final view = _viewSize;
-    final scene = _scene;
-    if (view == null || scene == null || !mounted) return;
-    final bounds = scene.bounds;
+    if (view == null || !mounted) return;
     const margin = 32.0;
     final scale = bounds == null
         ? 1.0

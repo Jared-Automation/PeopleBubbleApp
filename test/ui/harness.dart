@@ -22,6 +22,7 @@ class AppHarness {
   static Future<AppHarness> start(
     WidgetTester tester, {
     Future<void> Function(GraphService service)? seed,
+    bool startOnList = false,
   }) async {
     tester.view.physicalSize = const Size(800, 3000);
     tester.view.devicePixelRatio = 1;
@@ -48,6 +49,11 @@ class AppHarness {
       ),
     );
     await harness.settle();
+    if (startOnList) {
+      // The app opens on the canvas; list tests switch tabs first.
+      await tester.tap(find.text('List'));
+      await harness.settle();
+    }
     return harness;
   }
 

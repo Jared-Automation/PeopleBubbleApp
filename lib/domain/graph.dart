@@ -100,14 +100,42 @@ class GraphSnapshot {
   }
 }
 
+/// [rootId] and everything below it through hierarchical lines (shared
+/// things included). Stops on repeats, so looped data can't hang it.
+Set<String> subtreeOf(GraphSnapshot snapshot, String rootId) {
+  final childrenOf = <String, List<String>>{};
+  for (final e in snapshot.hierarchicalEdges) {
+    (childrenOf[e.sourceId] ??= []).add(e.targetId);
+  }
+  final result = <String>{};
+  final stack = [rootId];
+  while (stack.isNotEmpty) {
+    final id = stack.removeLast();
+    if (!snapshot.nodes.containsKey(id) || !result.add(id)) continue;
+    stack.addAll(childrenOf[id] ?? const []);
+  }
+  return result;
+}
+
 /// What to keep bright when something is selected: the item, its lines and
 /// the bubbles at their other ends (all line types, hierarchical or not).
+///
+/// A [group] (e.g. a selected subtree) stays bright along with the lines
+/// inside it.
 ({Set<String> nodes, Set<String> edges}) neighborhoodOf(
   GraphSnapshot snapshot, {
   String? nodeId,
   String? edgeId,
+  Set<String> group = const {},
 }) {
-  final nodes = <String>{}, edges = <String>{};
+  final nodes = <String>{...group}, edges = <String>{};
+  if (group.isNotEmpty) {
+    for (final e in snapshot.edges.values) {
+      if (group.contains(e.sourceId) && group.contains(e.targetId)) {
+        edges.add(e.id);
+      }
+    }
+  }
   if (nodeId != null) {
     nodes.add(nodeId);
     for (final e in snapshot.edges.values) {

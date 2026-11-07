@@ -23,6 +23,7 @@ class GraphPainter extends CustomPainter {
     required this.highlight,
     this.selection,
     this.dimUnrelated = true,
+    this.group = const {},
   });
 
   final CanvasScene scene;
@@ -39,6 +40,9 @@ class GraphPainter extends CustomPainter {
   /// Fade everything not connected to [selection].
   final bool dimUnrelated;
 
+  /// A multi-bubble selection ("Select subtree"), ringed like [selection].
+  final Set<String> group;
+
   GraphSnapshot get snapshot => scene.snapshot;
 
   @override
@@ -47,12 +51,13 @@ class GraphPainter extends CustomPainter {
     canvas.translate(origin.dx, origin.dy);
 
     final selected = selection;
-    final focus = selected == null || !dimUnrelated
+    final focus = (selected == null && group.isEmpty) || !dimUnrelated
         ? null
         : neighborhoodOf(
             snapshot,
             nodeId: selected is NodeHit ? selected.id : null,
             edgeId: selected is EdgeHit ? selected.id : null,
+            group: group,
           );
     bool nodeBright(String id) => focus == null || focus.nodes.contains(id);
     bool edgeBright(String id) => focus == null || focus.edges.contains(id);
@@ -81,7 +86,8 @@ class GraphPainter extends CustomPainter {
     for (final n in scene.nodes.values) {
       if (!nodeBright(n.node.id)) continue;
       _paintNode(canvas, n.node, n.style, n.box);
-      if (selected is NodeHit && selected.id == n.node.id) {
+      if ((selected is NodeHit && selected.id == n.node.id) ||
+          group.contains(n.node.id)) {
         _paintSelectionRing(canvas, n.style, n.box);
       }
     }
@@ -225,6 +231,7 @@ class GraphPainter extends CustomPainter {
       old.scene != scene ||
       old.selection != selection ||
       old.dimUnrelated != dimUnrelated ||
+      old.group != group ||
       old.labelBackground != labelBackground ||
       old.highlight != highlight;
 }

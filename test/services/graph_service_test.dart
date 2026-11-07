@@ -256,6 +256,64 @@ void main() {
     expect((s.nodes[b]!.x, s.nodes[b]!.y), (1, 2), reason: 'kept');
   });
 
+  group('canvas operations', () {
+    test('moveNodes saves a whole group', () async {
+      final a = await g.createNode(label: 'A', x: 0, y: 0);
+      final b = await g.createNode(label: 'B', x: 10, y: 10);
+      await g.moveNodes({a: const Point(5, 6), b: const Point(15, 16)});
+      final s = await snap();
+      expect((s.nodes[a]!.x, s.nodes[a]!.y), (5, 6));
+      expect((s.nodes[b]!.x, s.nodes[b]!.y), (15, 16));
+    });
+
+    test('reverseEdge swaps the ends and reverses waypoint order', () async {
+      final a = await g.createNode(label: 'A');
+      final b = await g.createNode(label: 'B');
+      final e = await g.createEdge(
+        sourceId: a,
+        targetId: b,
+        typeId: SeedIds.likes,
+        label: 'x',
+      );
+      await db.batch((batch) {
+        batch.insertAll(db.waypoints, [
+          for (final id in ['w0', 'w1', 'w2'])
+            WaypointsCompanion.insert(id: Value(id), x: 0, y: 0),
+        ]);
+        batch.insertAll(db.edgeWaypoints, [
+          for (final (i, id) in ['w0', 'w1', 'w2'].indexed)
+            EdgeWaypointsCompanion.insert(
+              edgeId: e,
+              waypointId: id,
+              position: i,
+            ),
+        ]);
+      });
+
+      await g.reverseEdge(e);
+
+      final edge = (await snap()).edges[e]!;
+      expect((edge.sourceId, edge.targetId), (b, a));
+      expect((edge.typeId, edge.label), (SeedIds.likes, 'x'));
+      expect(edge.waypointIds, ['w2', 'w1', 'w0']);
+    });
+
+    test('reverseEdge refuses to form a loop', () async {
+      final a = await g.createNode(label: 'A');
+      final b = await g.createNode(label: 'B');
+      final c = await g.createNode(label: 'C');
+      await g.createEdge(sourceId: a, targetId: b, typeId: SeedIds.likes);
+      await g.createEdge(sourceId: b, targetId: c, typeId: SeedIds.likes);
+      final ac = await g.createEdge(
+        sourceId: a,
+        targetId: c,
+        typeId: SeedIds.likes,
+      );
+      // C → A would close A → B → C → A.
+      await expectLater(g.reverseEdge(ac), throwsA(isA<CycleBlocked>()));
+    });
+  });
+
   group('delete', () {
     test(
       'deleting a node removes its edges, links and orphan waypoints',

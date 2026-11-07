@@ -94,6 +94,25 @@ class GraphService {
     await _updateNode(id, NodesCompanion(x: Value(x), y: Value(y)));
   });
 
+  /// Saves several canvas positions at once (a dragged group), in one write.
+  Future<void> moveNodes(Map<String, Point<double>> positions) => _write((
+    s,
+  ) async {
+    for (final id in positions.keys) {
+      _requireNode(s, id);
+    }
+    final now = DateTime.now();
+    await _db.batch((b) {
+      for (final MapEntry(key: id, value: p) in positions.entries) {
+        b.update(
+          _db.nodes,
+          NodesCompanion(x: Value(p.x), y: Value(p.y), updatedAt: Value(now)),
+          where: (n) => n.id.equals(id),
+        );
+      }
+    });
+  });
+
   Future<void> setNodeOverrides(String id, NodeStyle overrides) =>
       _write((s) async {
         _requireNode(s, id);
@@ -138,6 +157,42 @@ class GraphService {
     }
     _checkNoCycle(s, newSourceId, edge.targetId, edge.typeId, ignoreEdgeId: id);
     await _updateEdge(id, EdgesCompanion(sourceId: Value(newSourceId)));
+  });
+
+  /// Swaps a line's ends (parent ↔ child), keeping its type and label.
+  /// Refused if the reversed line would form a loop. Waypoints keep their
+  /// places, in reverse order.
+  Future<void> reverseEdge(String id) => _write((s) async {
+    final edge = _requireEdge(s, id);
+    _checkNoCycle(
+      s,
+      edge.targetId,
+      edge.sourceId,
+      edge.typeId,
+      ignoreEdgeId: id,
+    );
+    await _updateEdge(
+      id,
+      EdgesCompanion(
+        sourceId: Value(edge.targetId),
+        targetId: Value(edge.sourceId),
+      ),
+    );
+    final count = edge.waypointIds.length;
+    if (count > 1) {
+      // position -> count-1-position in two steps, so the (edge, position)
+      // key never collides mid-update.
+      await _db.customUpdate(
+        'UPDATE edge_waypoints SET position = -1 - position WHERE edge_id = ?',
+        variables: [Variable(id)],
+        updates: {_db.edgeWaypoints},
+      );
+      await _db.customUpdate(
+        'UPDATE edge_waypoints SET position = position + ? WHERE edge_id = ?',
+        variables: [Variable(count), Variable(id)],
+        updates: {_db.edgeWaypoints},
+      );
+    }
   });
 
   /// Changes a line's type and label together (from the list's edit sheet).
