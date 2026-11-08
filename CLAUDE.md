@@ -112,6 +112,19 @@ use; it may go on the Play Store later, so keep it structured like a real app.
 - The app opens on **Bubbles** from Phase 6 on.
 - Select subtree makes a group; dragging any member moves the whole group (one write).
 
+## Waypoint decisions (confirmed Nov 7, 2026)
+
+- Dragging a line bends it (inserts a waypoint) **only when that line is already selected**;
+  otherwise a drag on a line pans, so the wide hit areas don't cause accidental bends.
+- Waypoint handles show when their line or the waypoint itself is selected. Shared (clamped)
+  waypoints always show a small dot so junctions are visible.
+- Dragging a group moves the waypoints of lines with both ends in the group, except waypoints
+  also used by a line leaving the group. Dragging a single bubble never moves waypoints.
+- "Smooth lines" is a canvas setting, off by default (curves through the waypoints).
+- The line wheel's Waypoint slice adds a waypoint at the pressed spot; slice positions stay.
+- Clamping: drop a waypoint within ~24 dp of another to merge them. Unclamp gives each line
+  its own copy, nudged apart. Delete removes the waypoint from every line using it.
+
 ## Project setup facts
 
 - Application ID: `com.jade.peoplebubble`. Dart package: `people_bubble`.

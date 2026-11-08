@@ -94,12 +94,17 @@ class GraphService {
     await _updateNode(id, NodesCompanion(x: Value(x), y: Value(y)));
   });
 
-  /// Saves several canvas positions at once (a dragged group), in one write.
-  Future<void> moveNodes(Map<String, Point<double>> positions) => _write((
-    s,
-  ) async {
+  /// Saves several canvas positions at once (a dragged group, and the
+  /// waypoints that travel with it), in one write.
+  Future<void> moveNodes(
+    Map<String, Point<double>> positions, {
+    Map<String, Point<double>> waypoints = const {},
+  }) => _write((s) async {
     for (final id in positions.keys) {
       _requireNode(s, id);
+    }
+    for (final id in waypoints.keys) {
+      _requireWaypoint(s, id);
     }
     final now = DateTime.now();
     await _db.batch((b) {
@@ -108,6 +113,17 @@ class GraphService {
           _db.nodes,
           NodesCompanion(x: Value(p.x), y: Value(p.y), updatedAt: Value(now)),
           where: (n) => n.id.equals(id),
+        );
+      }
+      for (final MapEntry(key: id, value: p) in waypoints.entries) {
+        b.update(
+          _db.waypoints,
+          WaypointsCompanion(
+            x: Value(p.x),
+            y: Value(p.y),
+            updatedAt: Value(now),
+          ),
+          where: (w) => w.id.equals(id),
         );
       }
     });
@@ -236,6 +252,167 @@ class GraphService {
     await (_db.delete(_db.edges)..where((e) => e.id.equals(id))).go();
     await _deleteOrphanWaypoints();
   });
+
+  // ------------------------------------------------------------ waypoints
+
+  /// Bends line [edgeId] through a new waypoint at [at], placed [index]-th
+  /// along it from the source end (clamped to the valid range). Returns the
+  /// waypoint's id.
+  Future<String> addWaypoint(
+    String edgeId, {
+    required int index,
+    required Point<double> at,
+  }) => _write((s) async {
+    final edge = _requireEdge(s, edgeId);
+    final id = newId();
+    await _db
+        .into(_db.waypoints)
+        .insert(WaypointsCompanion.insert(id: Value(id), x: at.x, y: at.y));
+    final ids = [...edge.waypointIds]
+      ..insert(index.clamp(0, edge.waypointIds.length), id);
+    await _setEdgeWaypoints(edgeId, ids);
+    return id;
+  });
+
+  Future<void> moveWaypoint(String id, Point<double> to) => _write((s) async {
+    _requireWaypoint(s, id);
+    await _writeWaypoint(id, to);
+  });
+
+  /// Clamps two waypoints together: every line through [dragged] goes
+  /// through [into] instead, and [dragged] is deleted. A line that would
+  /// then pass through the same point twice in a row keeps it once.
+  Future<void> mergeWaypoints(String dragged, String into) => _write((s) async {
+    _requireWaypoint(s, dragged);
+    _requireWaypoint(s, into);
+    if (dragged == into) return;
+    for (final edge in s.edges.values) {
+      if (!edge.waypointIds.contains(dragged)) continue;
+      final ids = <String>[];
+      for (final w in edge.waypointIds) {
+        final id = w == dragged ? into : w;
+        if (ids.isEmpty || ids.last != id) ids.add(id);
+      }
+      await _setEdgeWaypoints(edge.id, ids);
+    }
+    await (_db.delete(_db.waypoints)..where((w) => w.id.equals(dragged))).go();
+  });
+
+  /// Splits a shared waypoint: each line through it gets its own copy,
+  /// nudged [nudge] units along that line so the split is visible. Refused
+  /// if only one line uses it.
+  Future<void> unclampWaypoint(String id, {double nudge = 24}) => _write((
+    s,
+  ) async {
+    final w = _requireWaypoint(s, id);
+    final edges = [
+      for (final e in s.edges.values)
+        if (e.waypointIds.contains(id)) e,
+    ];
+    if (edges.length < 2) {
+      throw const InvalidInput('Only one line uses that waypoint.');
+    }
+    final here = Point(w.x, w.y);
+    for (final (k, edge) in edges.indexed) {
+      final dir = _nudgeAlong(s, edge, id, here, k, edges.length);
+      final at = Point(here.x + dir.x * nudge, here.y + dir.y * nudge);
+      if (k == 0) {
+        // The first line keeps the original (moved a little).
+        await _writeWaypoint(id, at);
+        continue;
+      }
+      final copy = newId();
+      await _db
+          .into(_db.waypoints)
+          .insert(WaypointsCompanion.insert(id: Value(copy), x: at.x, y: at.y));
+      await _setEdgeWaypoints(edge.id, [
+        for (final x in edge.waypointIds) x == id ? copy : x,
+      ]);
+    }
+  });
+
+  /// Removes a waypoint from every line that bends through it.
+  Future<void> deleteWaypoint(String id) => _write((s) async {
+    _requireWaypoint(s, id);
+    for (final edge in s.edges.values) {
+      if (!edge.waypointIds.contains(id)) continue;
+      await _setEdgeWaypoints(edge.id, [
+        for (final x in edge.waypointIds)
+          if (x != id) x,
+      ]);
+    }
+    await (_db.delete(_db.waypoints)..where((w) => w.id.equals(id))).go();
+  });
+
+  /// A unit vector from waypoint [id] toward the middle of its neighbours
+  /// on [edge] (the points just before and after it), so an unclamped copy
+  /// slides along its own line. Falls back to spreading the [count] copies
+  /// evenly around a circle when the neighbours are unknown or cancel out.
+  Point<double> _nudgeAlong(
+    GraphSnapshot s,
+    GraphEdge edge,
+    String id,
+    Point<double> here,
+    int k,
+    int count,
+  ) {
+    Point<double>? waypointAt(String wid) {
+      final w = s.waypoints[wid];
+      return w == null ? null : Point(w.x, w.y);
+    }
+
+    Point<double>? nodeAt(String nid) {
+      final n = s.nodes[nid];
+      return n == null || !n.isPlaced ? null : Point(n.x!, n.y!);
+    }
+
+    final ids = edge.waypointIds;
+    final i = ids.indexOf(id);
+    final before = i == 0 ? nodeAt(edge.sourceId) : waypointAt(ids[i - 1]);
+    final after = i == ids.length - 1
+        ? nodeAt(edge.targetId)
+        : waypointAt(ids[i + 1]);
+    final neighbours = [?before, ?after];
+    if (neighbours.isNotEmpty) {
+      var mx = 0.0, my = 0.0;
+      for (final p in neighbours) {
+        mx += p.x / neighbours.length;
+        my += p.y / neighbours.length;
+      }
+      final dx = mx - here.x, dy = my - here.y;
+      final length = sqrt(dx * dx + dy * dy);
+      if (length > 1e-6) return Point(dx / length, dy / length);
+    }
+    final angle = 2 * pi * k / count;
+    return Point(cos(angle), sin(angle));
+  }
+
+  Future<void> _writeWaypoint(String id, Point<double> at) =>
+      (_db.update(_db.waypoints)..where((w) => w.id.equals(id))).write(
+        WaypointsCompanion(
+          x: Value(at.x),
+          y: Value(at.y),
+          updatedAt: Value(DateTime.now()),
+        ),
+      );
+
+  /// Replaces line [edgeId]'s waypoint list with [ids], in order.
+  Future<void> _setEdgeWaypoints(String edgeId, List<String> ids) async {
+    await (_db.delete(
+      _db.edgeWaypoints,
+    )..where((r) => r.edgeId.equals(edgeId))).go();
+    await _db.batch((b) {
+      b.insertAll(_db.edgeWaypoints, [
+        for (final (i, id) in ids.indexed)
+          EdgeWaypointsCompanion.insert(
+            edgeId: edgeId,
+            waypointId: id,
+            position: i,
+          ),
+      ]);
+    });
+    await _updateEdge(edgeId, const EdgesCompanion());
+  }
 
   // ---------------------------------------------------------------- types
 
@@ -411,6 +588,10 @@ class GraphService {
   GraphNode _requireNode(GraphSnapshot s, String id) =>
       s.nodes[id] ??
       (throw const InvalidInput('That bubble no longer exists.'));
+
+  GraphWaypoint _requireWaypoint(GraphSnapshot s, String id) =>
+      s.waypoints[id] ??
+      (throw const InvalidInput('That waypoint no longer exists.'));
 
   GraphEdge _requireEdge(GraphSnapshot s, String id) =>
       s.edges[id] ?? (throw const InvalidInput('That line no longer exists.'));

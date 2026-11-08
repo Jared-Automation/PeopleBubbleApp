@@ -5,6 +5,7 @@ library;
 import 'dart:math';
 
 import 'geometry.dart';
+import 'polyline.dart';
 import 'style.dart';
 
 sealed class CanvasHit {
@@ -39,25 +40,59 @@ final class EdgeHit extends CanvasHit {
   String toString() => 'EdgeHit($id)';
 }
 
-typedef HitNode = ({String id, NodeShape shape, Rectangle<double> box});
-typedef HitEdge = ({String id, Point<double> from, Point<double> to});
+final class WaypointHit extends CanvasHit {
+  const WaypointHit(super.id);
 
-/// The bubble or line at [p], or null for empty canvas.
+  @override
+  bool operator ==(Object other) => other is WaypointHit && other.id == id;
+
+  @override
+  int get hashCode => Object.hash(WaypointHit, id);
+
+  @override
+  String toString() => 'WaypointHit($id)';
+}
+
+typedef HitNode = ({String id, NodeShape shape, Rectangle<double> box});
+
+/// A line as drawn: its points from source end to target end.
+typedef HitEdge = ({String id, List<Point<double>> points});
+typedef HitWaypoint = ({String id, Point<double> at});
+
+/// The waypoint, bubble or line at [p], or null for empty canvas.
 ///
+/// - A waypoint handle is hit within [minTarget] / 2 of it; the closest
+///   wins. Only the [waypoints] passed in (the visible handles) count, and
+///   they win over everything else: they're small and grabbed on purpose.
 /// - A bubble is hit inside its shape, or inside a box at least [minTarget]
 ///   across centred on it, so small or zoomed-out bubbles stay tappable.
 ///   Among several, the one whose centre is closest wins.
 /// - A line is hit within [lineTolerance] of it; the closest wins.
-/// - Bubbles win over lines.
+/// - Inside a bubble's actual shape, the bubble wins. In the padding around
+///   a small bubble, a line wins if it's nearer than the bubble's edge, so
+///   lines stay selectable when zoomed out among tiny bubbles.
 CanvasHit? hitTest(
   Point<double> p, {
   required Iterable<HitNode> nodes,
   required Iterable<HitEdge> edges,
+  Iterable<HitWaypoint> waypoints = const [],
   required double minTarget,
   required double lineTolerance,
 }) {
+  String? bestWaypoint;
+  var bestWaypointDistance = minTarget / 2;
+  for (final w in waypoints) {
+    final d = p.distanceTo(w.at);
+    if (d <= bestWaypointDistance) {
+      (bestWaypoint, bestWaypointDistance) = (w.id, d);
+    }
+  }
+  if (bestWaypoint != null) return WaypointHit(bestWaypoint);
+
   String? bestNode;
   var bestNodeDistance = double.infinity;
+  var bestNodeInShape = false;
+  var bestNodeGap = 0.0;
   for (final n in nodes) {
     final padX = max(0.0, (minTarget - n.box.width) / 2);
     final padY = max(0.0, (minTarget - n.box.height) / 2);
@@ -71,16 +106,28 @@ CanvasHit? hitTest(
         ? target.containsPoint(p)
         : shapeContains(n.shape, n.box, p);
     if (!inside) continue;
+    final inShape = shapeContains(n.shape, n.box, p);
     final d = p.distanceTo(centerOf(n.box));
-    if (d < bestNodeDistance) (bestNode, bestNodeDistance) = (n.id, d);
+    // A hit on the shape itself beats one in another bubble's padding.
+    if ((inShape && !bestNodeInShape) ||
+        (inShape == bestNodeInShape && d < bestNodeDistance)) {
+      bestNode = n.id;
+      bestNodeDistance = d;
+      bestNodeInShape = inShape;
+      bestNodeGap = gapBetween(Rectangle(p.x, p.y, 0, 0), n.box);
+    }
   }
-  if (bestNode != null) return NodeHit(bestNode);
+  if (bestNode != null && bestNodeInShape) return NodeHit(bestNode);
 
   String? bestEdge;
   var bestEdgeDistance = lineTolerance;
   for (final e in edges) {
-    final d = distanceToSegment(p, e.from, e.to);
+    final d = distanceToPolyline(p, e.points);
     if (d <= bestEdgeDistance) (bestEdge, bestEdgeDistance) = (e.id, d);
+  }
+  if (bestNode != null &&
+      (bestEdge == null || bestNodeGap <= bestEdgeDistance)) {
+    return NodeHit(bestNode);
   }
   return bestEdge == null ? null : EdgeHit(bestEdge);
 }

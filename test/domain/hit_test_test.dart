@@ -14,10 +14,9 @@ HitNode node(String id, Point<double> c, {double w = 100, double h = 50}) =>
 void main() {
   final sam = node('sam', const Point(0, 0));
   final sushi = node('sushi', const Point(0, 300));
-  final line = (
+  final HitEdge line = (
     id: 'e1',
-    from: const Point(0.0, 25.0),
-    to: const Point(0.0, 275.0),
+    points: const [Point(0.0, 25.0), Point(0.0, 275.0)],
   );
 
   CanvasHit? at(Point<double> p, {double minTarget = 48}) => hitTest(
@@ -51,6 +50,27 @@ void main() {
     // shape, and the closer centre wins between Sam and Sushi.
     expect(at(const Point(150, 40), minTarget: 480), const NodeHit('sam'));
     expect(at(const Point(150, 260), minTarget: 480), const NodeHit('sushi'));
+  });
+
+  test('zoomed out, a line beats the padding around a small bubble', () {
+    // (3, 150) is inside Sam's padded 480-unit target but 125 units from
+    // Sam's edge, and only 3 from the line.
+    expect(at(const Point(3, 150), minTarget: 480), const EdgeHit('e1'));
+    // Next to Sam's edge, Sam still wins.
+    expect(at(const Point(60, 30), minTarget: 480), const NodeHit('sam'));
+  });
+
+  test("a bubble's own shape beats another bubble's padding", () {
+    final tiny = node('tiny', const Point(40, 30), w: 10, h: 10);
+    final hit = hitTest(
+      const Point(30, 10),
+      nodes: [sam, tiny],
+      edges: const [],
+      minTarget: 480,
+      lineTolerance: 24,
+    );
+    // Tiny's centre is closer (22 vs 32), but the point is on Sam's ellipse.
+    expect(hit, const NodeHit('sam'));
   });
 
   test('distanceToSegment measures to the nearest point, ends included', () {
@@ -93,5 +113,43 @@ void main() {
     expect(n.nodes, {'sam', 'sushi', 'priya'});
     expect(n.edges, {'a', 'c'});
     expect(neighborhoodOf(s, edgeId: 'b').nodes, {'priya', 'sushi'});
+  });
+
+  group('bent lines and waypoints', () {
+    // Sam → (200, 150) → Sushi.
+    final HitEdge bent = (
+      id: 'e2',
+      points: const [Point(0.0, 25.0), Point(200.0, 150.0), Point(0.0, 275.0)],
+    );
+    CanvasHit? hit(Point<double> p, {bool handles = false}) => hitTest(
+      p,
+      nodes: [sam, sushi],
+      edges: [bent],
+      waypoints: handles ? [(id: 'w1', at: const Point(200.0, 150.0))] : [],
+      minTarget: 48,
+      lineTolerance: 24,
+    );
+
+    test('a bent line is hit along its bend, not its straight chord', () {
+      expect(hit(const Point(195, 150)), const EdgeHit('e2'));
+      expect(hit(const Point(0, 150)), isNull);
+    });
+
+    test('a visible waypoint handle wins over its line', () {
+      expect(
+        hit(const Point(210, 150), handles: true),
+        const WaypointHit('w1'),
+      );
+      expect(hit(const Point(210, 150)), const EdgeHit('e2'));
+    });
+
+    test('a handle is hit within half the touch target', () {
+      expect(
+        hit(const Point(223, 150), handles: true),
+        const WaypointHit('w1'),
+      );
+      // Past the handle's reach (and the line's): nothing.
+      expect(hit(const Point(226, 150), handles: true), isNull);
+    });
   });
 }

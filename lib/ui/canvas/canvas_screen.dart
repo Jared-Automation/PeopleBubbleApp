@@ -12,6 +12,7 @@ import '../../domain/geometry.dart';
 import '../../domain/graph.dart';
 import '../../domain/hit_test.dart';
 import '../../domain/placement.dart';
+import '../../domain/polyline.dart';
 import '../../domain/radial_menu.dart';
 import '../common/confirm_delete.dart';
 import '../common/line_sheet.dart';
@@ -24,6 +25,7 @@ import 'canvas_state.dart';
 import 'graph_painter.dart';
 import 'grid_painter.dart';
 import 'radial_wheel.dart';
+import 'waypoint_painter.dart';
 import 'rename_dialog.dart';
 
 /// World (0, 0) sits in the middle of a huge canvas child, so the world can
@@ -43,7 +45,9 @@ class _Press {
     required this.time,
     required this.hit,
     required this.world,
-    required this.starts,
+    this.starts = const {},
+    this.waypointStarts = const {},
+    this.bend,
   });
 
   final int pointer;
@@ -59,6 +63,17 @@ class _Press {
   /// Centres of the bubbles a drag would move: the touched bubble, or its
   /// whole group if it's part of a selected subtree.
   final Map<String, Point<double>> starts;
+
+  /// Waypoints a drag would move: the touched waypoint, or those carried
+  /// along with a dragged group.
+  final Map<String, Point<double>> waypointStarts;
+
+  /// Set when the touch landed on the selected line: dragging bends it
+  /// through a new waypoint at this place along it.
+  final ({String edgeId, int index})? bend;
+
+  /// Whether moving this finger drags something (instead of panning).
+  bool get drags => hit is NodeHit || hit is WaypointHit || bend != null;
 }
 
 /// An open radial wheel.
@@ -158,6 +173,20 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
   /// dragged, and a dropped bubble until its saved position arrives.
   final _overrides = <String, Point<double>>{};
 
+  /// Live waypoint positions, like [_overrides].
+  final _waypointOverrides = <String, Point<double>>{};
+
+  /// A waypoint being added by dragging the selected line. It stays drawn
+  /// after the drop until the saved one ([_bendSavedId]) arrives.
+  PendingBend? _bend;
+  String? _bendSavedId;
+
+  /// The waypoint a dragged waypoint would clamp onto if dropped now.
+  String? _mergeTarget;
+
+  /// How close (in screen pixels) a dropped waypoint must be to clamp.
+  static const _clampRadiusPx = 24.0;
+
   @override
   void dispose() {
     _placeDebounce?.cancel();
@@ -221,12 +250,32 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
       final node = snapshot.nodes[id];
       return node == null || (node.x == p.x && node.y == p.y);
     });
+    _waypointOverrides.removeWhere((id, p) {
+      if (_dragging && (_press?.waypointStarts.containsKey(id) ?? false)) {
+        return false;
+      }
+      final w = snapshot.waypoints[id];
+      return w == null || (w.x == p.x && w.y == p.y);
+    });
+    final savedBend = _bendSavedId;
+    if (savedBend != null &&
+        !_dragging &&
+        (snapshot.edges[_bend?.edgeId]?.waypointIds.contains(savedBend) ??
+            true)) {
+      _bend = null;
+      _bendSavedId = null;
+    }
     final scene = _scene = CanvasScene.build(
       snapshot,
       _cache,
       overrides: _overrides,
+      waypointOverrides: _waypointOverrides,
+      bend: _bend,
+      smooth: settings.smoothLines,
     );
     final selection = _validSelection(snapshot);
+    final draggingWaypoint =
+        _dragging && (_press?.hit is WaypointHit || _press?.bend != null);
     final colors = Theme.of(context).colorScheme;
 
     return LayoutBuilder(
@@ -284,6 +333,26 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
                   ),
                 ),
               ),
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: CustomPaint(
+                    painter: WaypointPainter(
+                      transform: _transform,
+                      origin: _origin,
+                      scene: scene,
+                      color: colors.primary,
+                      background: colors.surface,
+                      selection: selection,
+                      handles: {
+                        ...scene.handlesFor(selection),
+                        if (_bend != null) pendingWaypointId,
+                      },
+                      mergeTarget: _mergeTarget,
+                      showAll: draggingWaypoint,
+                    ),
+                  ),
+                ),
+              ),
               if (_wheel case final wheel?)
                 Positioned.fill(
                   child: RadialWheel(
@@ -309,6 +378,7 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
     final exists = switch (selection) {
       NodeHit(:final id) => snapshot.nodes.containsKey(id),
       EdgeHit(:final id) => snapshot.edges.containsKey(id),
+      WaypointHit(:final id) => snapshot.waypoints.containsKey(id),
       null => true,
     };
     if (exists) return selection;
@@ -340,21 +410,56 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
       return;
     }
     final world = _toWorld(e.localPosition);
-    final hit = _scene?.hitAt(world, scale: _scale);
+    final scene = _scene;
+    final selection = ref.read(canvasSelectionProvider);
+    final hit = scene?.hitAt(world, scale: _scale, selection: selection);
+    final starts = hit is NodeHit
+        ? _dragStarts(hit.id)
+        : const <String, Point<double>>{};
+    final bendEdge = hit is EdgeHit && hit == selection
+        ? scene?.edgeById(hit.id)
+        : null;
     final press = _press = _Press(
       pointer: e.pointer,
       start: e.localPosition,
       time: e.timeStamp,
       hit: hit,
       world: world,
-      starts: hit is NodeHit ? _dragStarts(hit.id) : const {},
+      starts: starts,
+      waypointStarts: switch (hit) {
+        WaypointHit(:final id) => {id: ?scene?.waypoints[id]},
+        NodeHit() when starts.length > 1 => _groupWaypoints(
+          starts.keys.toSet(),
+        ),
+        _ => const {},
+      },
+      bend: bendEdge == null
+          ? null
+          : (
+              edgeId: bendEdge.edge.id,
+              index: insertionIndex(bendEdge.corners, world),
+            ),
     );
-    if (hit is NodeHit) {
+    if (press.drags) {
       _frozenView = _transform.value.clone();
       setState(() => _panEnabled = false);
     }
     _longPress?.cancel();
     _longPress = Timer(_longPressTime, () => _openWheel(press));
+  }
+
+  /// Waypoints that travel with a dragged [group]: those on lines with both
+  /// ends in it, unless a line leaving the group also uses them.
+  Map<String, Point<double>> _groupWaypoints(Set<String> group) {
+    final scene = _scene!;
+    final inside = <String>{}, outside = <String>{};
+    for (final e in scene.snapshot.edges.values) {
+      final within = group.contains(e.sourceId) && group.contains(e.targetId);
+      (within ? inside : outside).addAll(e.waypointIds);
+    }
+    return {
+      for (final id in inside.difference(outside)) id: ?scene.waypoints[id],
+    };
   }
 
   /// Centres of what a drag starting on [id] moves: its group, or just it.
@@ -386,7 +491,7 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
       _longPress?.cancel();
     }
     if (!_dragging) {
-      if (press.hit is! NodeHit) return;
+      if (!press.drags) return;
       if ((e.localPosition - press.start).distance < kTouchSlop) return;
       _dragging = true;
       _startEdgePan();
@@ -437,7 +542,12 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
   /// Abandons the current touch: a dragged bubble snaps back.
   void _cancelPress() {
     _longPress?.cancel();
-    if (_dragging) _press?.starts.keys.forEach(_overrides.remove);
+    if (_dragging) {
+      _press?.starts.keys.forEach(_overrides.remove);
+      _press?.waypointStarts.keys.forEach(_waypointOverrides.remove);
+      if (_bendSavedId == null) _bend = null;
+    }
+    _mergeTarget = null;
     _dragging = false;
     _press = null;
     _lastTapTime = null;
@@ -455,13 +565,64 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
       for (final MapEntry(key: id, value: start) in press.starts.entries) {
         _overrides[id] = Point(start.x + dx, start.y + dy);
       }
+      for (final MapEntry(key: id, value: start)
+          in press.waypointStarts.entries) {
+        _waypointOverrides[id] = Point(start.x + dx, start.y + dy);
+      }
+      if (press.bend case final bend?) {
+        _bend = (edgeId: bend.edgeId, index: bend.index, at: world);
+      }
+      // A single dragged waypoint (or a new bend) can clamp onto another.
+      final dragged = switch (press.hit) {
+        WaypointHit(:final id) => id,
+        _ when press.bend != null => pendingWaypointId,
+        _ => null,
+      };
+      final at = dragged == null
+          ? null
+          : (dragged == pendingWaypointId
+                ? world
+                : _waypointOverrides[dragged]);
+      _mergeTarget = at == null
+          ? null
+          : _scene?.waypointNear(at, _clampRadiusPx / _scale, except: dragged);
     });
   }
 
   Future<void> _finishDrag(_Press press) async {
-    final id = (press.hit! as NodeHit).id;
     _dragging = false;
     _stopEdgePan();
+    final target = _mergeTarget;
+    _mergeTarget = null;
+    final snap = ref.read(canvasSettingsProvider).snapToGrid;
+    final service = ref.read(graphServiceProvider);
+    if (press.bend case final bend?) {
+      await _finishBend(bend.edgeId, target, snap);
+      return;
+    }
+    if (press.hit case WaypointHit(:final id)) {
+      final dropped = _waypointOverrides[id];
+      if (dropped == null) return;
+      final targetAt = target == null ? null : _scene?.waypoints[target];
+      final at = targetAt ?? (snap ? snapToGrid(dropped) : dropped);
+      setState(() => _waypointOverrides[id] = at);
+      try {
+        if (target != null) {
+          await service.mergeWaypoints(id, target);
+          ref
+              .read(canvasSelectionProvider.notifier)
+              .select(WaypointHit(target));
+        } else {
+          await service.moveWaypoint(id, at);
+        }
+      } catch (e) {
+        if (!mounted) return;
+        setState(() => _waypointOverrides.remove(id));
+        showGraphError(context, e);
+      }
+      return;
+    }
+    final id = (press.hit! as NodeHit).id;
     final dropped = _overrides[id];
     if (dropped == null) return;
     // Snap the touched bubble; the rest of a group keeps its shape.
@@ -474,18 +635,48 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
       for (final MapEntry(key: g, value: s) in press.starts.entries)
         g: Point(s.x + dx, s.y + dy),
     };
-    setState(() => _overrides.addAll(positions));
+    final waypoints = {
+      for (final MapEntry(key: w, value: s) in press.waypointStarts.entries)
+        w: Point(s.x + dx, s.y + dy),
+    };
+    setState(() {
+      _overrides.addAll(positions);
+      _waypointOverrides.addAll(waypoints);
+    });
     // One write per drag, on release.
     try {
-      final service = ref.read(graphServiceProvider);
-      if (positions.length == 1) {
+      if (positions.length == 1 && waypoints.isEmpty) {
         await service.moveNode(id, snapped.x, snapped.y);
       } else {
-        await service.moveNodes(positions);
+        await service.moveNodes(positions, waypoints: waypoints);
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() => positions.keys.forEach(_overrides.remove));
+      setState(() {
+        positions.keys.forEach(_overrides.remove);
+        waypoints.keys.forEach(_waypointOverrides.remove);
+      });
+      showGraphError(context, e);
+    }
+  }
+
+  /// Saves the waypoint a drag on the selected line made, clamping it onto
+  /// [target] if it was dropped there.
+  Future<void> _finishBend(String edgeId, String? target, bool snap) async {
+    final bend = _bend;
+    if (bend == null) return;
+    final targetAt = target == null ? null : _scene?.waypoints[target];
+    final at = targetAt ?? (snap ? snapToGrid(bend.at) : bend.at);
+    setState(() => _bend = (edgeId: edgeId, index: bend.index, at: at));
+    try {
+      final service = ref.read(graphServiceProvider);
+      final id = await service.addWaypoint(edgeId, index: bend.index, at: at);
+      if (target != null) await service.mergeWaypoints(id, target);
+      // Keep drawing the pending bend until this arrives.
+      if (mounted) setState(() => _bendSavedId = target ?? id);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _bend = null);
       showGraphError(context, e);
     }
   }
@@ -504,6 +695,8 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
           _renameNode(id);
         case EdgeHit(:final id):
           _renameEdge(id);
+        case WaypointHit():
+          break;
         case null:
           _fit(animate: true);
       }
@@ -523,7 +716,14 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
     if (!mounted || view == null || snapshot == null || _dragging) return;
     final (title, items) = switch (press.hit) {
       NodeHit(:final id) => (snapshot.nodes[id]?.label ?? '', _nodeItems(id)),
-      EdgeHit(:final id) => (_edgeTitle(snapshot, id), _edgeItems(id)),
+      EdgeHit(:final id) => (
+        _edgeTitle(snapshot, id),
+        _edgeItems(id, press.world),
+      ),
+      WaypointHit(:final id) => (
+        (_scene?.isShared(id) ?? false) ? 'Clamp' : 'Waypoint',
+        _waypointItems(id),
+      ),
       null => ('', _canvasItems(press.world)),
     };
     final hasMore = items.any((i) => i.isMore);
@@ -667,7 +867,7 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
     ),
   ];
 
-  List<WheelItem> _edgeItems(String id) => [
+  List<WheelItem> _edgeItems(String id, Point<double> world) => [
     WheelItem(
       label: 'Type',
       icon: Icons.category_outlined,
@@ -678,7 +878,11 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
       icon: Icons.label_outline,
       onSelected: () => _renameEdge(id),
     ),
-    const WheelItem(label: 'Waypoint', icon: Icons.commit, comingSoon: true),
+    WheelItem(
+      label: 'Waypoint',
+      icon: Icons.commit,
+      onSelected: () => _addWaypointAt(id, world),
+    ),
     WheelItem(
       label: 'Delete',
       icon: Icons.delete_outline,
@@ -702,6 +906,43 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
       ],
     ),
   ];
+
+  List<WheelItem> _waypointItems(String id) => [
+    WheelItem(
+      label: 'Unclamp',
+      icon: Icons.call_split,
+      // Greyed out unless several lines share it.
+      onSelected: (_scene?.isShared(id) ?? false)
+          ? () => _run(() => ref.read(graphServiceProvider).unclampWaypoint(id))
+          : null,
+    ),
+    WheelItem(
+      label: 'Delete',
+      icon: Icons.delete_outline,
+      onSelected: () =>
+          _run(() => ref.read(graphServiceProvider).deleteWaypoint(id)),
+    ),
+  ];
+
+  /// Bends line [edgeId] through a new waypoint at [world] (the wheel's
+  /// "Waypoint" slice), in the right place along it.
+  Future<void> _addWaypointAt(String edgeId, Point<double> world) async {
+    final edge = _scene?.edgeById(edgeId);
+    if (edge == null) return;
+    final at = ref.read(canvasSettingsProvider).snapToGrid
+        ? snapToGrid(world)
+        : world;
+    ref.read(canvasSelectionProvider.notifier).select(EdgeHit(edgeId));
+    await _run(
+      () => ref
+          .read(graphServiceProvider)
+          .addWaypoint(
+            edgeId,
+            index: insertionIndex(edge.corners, world),
+            at: at,
+          ),
+    );
+  }
 
   List<WheelItem> _canvasItems(Point<double> world) => [
     WheelItem(
@@ -1031,6 +1272,11 @@ class _SettingsMenu extends ConsumerWidget {
           value: () => notifier.setSnapToGrid(!settings.snapToGrid),
           checked: settings.snapToGrid,
           child: const Text('Snap to grid'),
+        ),
+        CheckedPopupMenuItem(
+          value: () => notifier.setSmoothLines(!settings.smoothLines),
+          checked: settings.smoothLines,
+          child: const Text('Smooth lines'),
         ),
       ],
     );

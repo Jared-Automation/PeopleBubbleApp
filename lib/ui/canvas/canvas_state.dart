@@ -3,8 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/hit_test.dart';
 import '../list/list_state.dart';
 
-/// The selected bubble or line on the canvas, or null. Phase 6's wheel acts
-/// on this.
+/// The selected bubble, line or waypoint on the canvas, or null. The wheel
+/// acts on this.
 class CanvasSelectionNotifier extends Notifier<CanvasHit?> {
   @override
   CanvasHit? build() => null;
@@ -33,18 +33,37 @@ final canvasGroupProvider = NotifierProvider<CanvasGroupNotifier, Set<String>>(
 );
 
 class CanvasSettings {
-  const CanvasSettings({required this.dimUnrelated, required this.snapToGrid});
+  const CanvasSettings({
+    required this.dimUnrelated,
+    required this.snapToGrid,
+    required this.smoothLines,
+  });
 
   /// Dim everything not connected to the selection.
   final bool dimUnrelated;
 
-  /// Drop dragged bubbles on the nearest grid point.
+  /// Drop dragged bubbles and waypoints on the nearest grid point.
   final bool snapToGrid;
+
+  /// Draw lines as curves through their waypoints instead of corners.
+  final bool smoothLines;
+
+  CanvasSettings copyWith({
+    bool? dimUnrelated,
+    bool? snapToGrid,
+    bool? smoothLines,
+  }) => CanvasSettings(
+    dimUnrelated: dimUnrelated ?? this.dimUnrelated,
+    snapToGrid: snapToGrid ?? this.snapToGrid,
+    smoothLines: smoothLines ?? this.smoothLines,
+  );
 }
 
 /// Canvas preferences, saved across launches.
 class CanvasSettingsNotifier extends Notifier<CanvasSettings> {
-  static const _dimKey = 'canvas.dimUnrelated', _snapKey = 'canvas.snapToGrid';
+  static const _dimKey = 'canvas.dimUnrelated',
+      _snapKey = 'canvas.snapToGrid',
+      _smoothKey = 'canvas.smoothLines';
 
   @override
   CanvasSettings build() {
@@ -52,17 +71,23 @@ class CanvasSettingsNotifier extends Notifier<CanvasSettings> {
     return CanvasSettings(
       dimUnrelated: prefs.getBool(_dimKey) ?? true,
       snapToGrid: prefs.getBool(_snapKey) ?? false,
+      smoothLines: prefs.getBool(_smoothKey) ?? false,
     );
   }
 
   void setDimUnrelated(bool value) {
     ref.read(sharedPreferencesProvider).setBool(_dimKey, value);
-    state = CanvasSettings(dimUnrelated: value, snapToGrid: state.snapToGrid);
+    state = state.copyWith(dimUnrelated: value);
   }
 
   void setSnapToGrid(bool value) {
     ref.read(sharedPreferencesProvider).setBool(_snapKey, value);
-    state = CanvasSettings(dimUnrelated: state.dimUnrelated, snapToGrid: value);
+    state = state.copyWith(snapToGrid: value);
+  }
+
+  void setSmoothLines(bool value) {
+    ref.read(sharedPreferencesProvider).setBool(_smoothKey, value);
+    state = state.copyWith(smoothLines: value);
   }
 }
 

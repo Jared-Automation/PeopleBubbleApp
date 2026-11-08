@@ -53,12 +53,7 @@ class GraphPainter extends CustomPainter {
     final selected = selection;
     final focus = (selected == null && group.isEmpty) || !dimUnrelated
         ? null
-        : neighborhoodOf(
-            snapshot,
-            nodeId: selected is NodeHit ? selected.id : null,
-            edgeId: selected is EdgeHit ? selected.id : null,
-            group: group,
-          );
+        : _focusOf(selected);
     bool nodeBright(String id) => focus == null || focus.nodes.contains(id);
     bool edgeBright(String id) => focus == null || focus.edges.contains(id);
 
@@ -67,7 +62,7 @@ class GraphPainter extends CustomPainter {
     if (focus != null) {
       canvas.saveLayer(null, Paint()..color = const Color(0x40000000));
       for (final e in scene.edges) {
-        if (!edgeBright(e.edge.id)) _paintEdge(canvas, e.edge, e.from, e.to);
+        if (!edgeBright(e.edge.id)) _paintEdge(canvas, e);
       }
       for (final n in scene.nodes.values) {
         if (!nodeBright(n.node.id)) _paintNode(canvas, n.node, n.style, n.box);
@@ -79,9 +74,9 @@ class GraphPainter extends CustomPainter {
     for (final e in scene.edges) {
       if (!edgeBright(e.edge.id)) continue;
       if (selected is EdgeHit && selected.id == e.edge.id) {
-        _paintEdgeGlow(canvas, e.edge, e.from, e.to);
+        _paintEdgeGlow(canvas, e);
       }
-      _paintEdge(canvas, e.edge, e.from, e.to);
+      _paintEdge(canvas, e);
     }
     for (final n in scene.nodes.values) {
       if (!nodeBright(n.node.id)) continue;
@@ -94,20 +89,44 @@ class GraphPainter extends CustomPainter {
     canvas.restore();
   }
 
-  void _paintEdgeGlow(
-    Canvas canvas,
-    GraphEdge edge,
-    Point<double> from,
-    Point<double> to,
-  ) {
-    canvas.drawLine(
-      Offset(from.x, from.y),
-      Offset(to.x, to.y),
+  /// What stays bright for [selected] (and the group).
+  ({Set<String> nodes, Set<String> edges}) _focusOf(CanvasHit? selected) {
+    if (selected is! WaypointHit) {
+      return neighborhoodOf(
+        snapshot,
+        nodeId: selected is NodeHit ? selected.id : null,
+        edgeId: selected is EdgeHit ? selected.id : null,
+        group: group,
+      );
+    }
+    // A waypoint: the lines through it and their ends.
+    final nodes = <String>{...group}, edges = <String>{};
+    for (final e in snapshot.edges.values) {
+      if (!e.waypointIds.contains(selected.id)) continue;
+      edges.add(e.id);
+      nodes.addAll([e.sourceId, e.targetId]);
+    }
+    return (nodes: nodes, edges: edges);
+  }
+
+  void _paintEdgeGlow(Canvas canvas, SceneEdge e) {
+    canvas.drawPath(
+      _pathThrough(e.path),
       Paint()
         ..color = highlight.withValues(alpha: 0.35)
-        ..strokeWidth = snapshot.edgeStyleOf(edge).width! + 10
-        ..strokeCap = StrokeCap.round,
+        ..strokeWidth = snapshot.edgeStyleOf(e.edge).width! + 10
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
     );
+  }
+
+  static Path _pathThrough(List<Point<double>> points) {
+    final path = Path()..moveTo(points.first.x, points.first.y);
+    for (final p in points.skip(1)) {
+      path.lineTo(p.x, p.y);
+    }
+    return path;
   }
 
   void _paintSelectionRing(
@@ -125,15 +144,22 @@ class GraphPainter extends CustomPainter {
     );
   }
 
-  void _paintEdge(
-    Canvas canvas,
-    GraphEdge edge,
-    Point<double> from,
-    Point<double> to,
-  ) {
-    final length = from.distanceTo(to);
-    if (length < 1) return;
+  void _paintEdge(Canvas canvas, SceneEdge e) {
+    final edge = e.edge;
+    final points = e.path;
+    final to = points.last;
+    // The arrow points along the line's last stretch: from the last point
+    // that's at least an arrow's length back (a smoothed line's final
+    // sample can be very close to its end).
     final style = snapshot.edgeStyleOf(edge);
+    final arrowSize = 6 + 2 * style.width!;
+    var back = points.length - 2;
+    while (back > 0 && points[back].distanceTo(to) < arrowSize) {
+      back--;
+    }
+    final from = points[back];
+    final length = from.distanceTo(to);
+    if (length < 1 && points.length == 2) return;
     final width = style.width!;
     final color = Color(style.color!);
     final paint = Paint()
@@ -144,16 +170,14 @@ class GraphPainter extends CustomPainter {
           ? StrokeCap.round
           : StrokeCap.butt;
 
-    final hasArrow = style.arrowhead == Arrowhead.end;
-    final arrowSize = 6 + 2 * width;
-    final ux = (to.x - from.x) / length, uy = (to.y - from.y) / length;
+    final hasArrow = style.arrowhead == Arrowhead.end && length >= 1;
+    final ux = length < 1 ? 0.0 : (to.x - from.x) / length;
+    final uy = length < 1 ? 0.0 : (to.y - from.y) / length;
     // Stop the line at the arrow's base so the tip stays sharp.
     final end = hasArrow && length > arrowSize
         ? Point(to.x - ux * arrowSize, to.y - uy * arrowSize)
         : to;
-    final line = Path()
-      ..moveTo(from.x, from.y)
-      ..lineTo(end.x, end.y);
+    final line = _pathThrough([...points.take(back + 1), end]);
     canvas.drawPath(dashed(line, style.lineStyle!, width), paint);
 
     if (hasArrow) {
@@ -171,7 +195,7 @@ class GraphPainter extends CustomPainter {
     final label = edge.label;
     if (label != null) {
       final text = cache.edgeLabel(label, style.color!);
-      final mid = Offset((from.x + to.x) / 2, (from.y + to.y) / 2);
+      final mid = Offset(e.label.x, e.label.y);
       final pill = Rect.fromCenter(
         center: mid,
         width: text.width + 10,

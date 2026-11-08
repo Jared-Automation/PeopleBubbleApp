@@ -314,6 +314,109 @@ void main() {
     });
   });
 
+  group('waypoints', () {
+    // A(0,0) → B(300,0) and C(0,200) → D(300,200), both Likes.
+    late String a, b, c, d, ab, cd;
+    setUp(() async {
+      a = await g.createNode(label: 'A', x: 0, y: 0);
+      b = await g.createNode(label: 'B', x: 300, y: 0);
+      c = await g.createNode(label: 'C', x: 0, y: 200);
+      d = await g.createNode(label: 'D', x: 300, y: 200);
+      ab = await g.createEdge(sourceId: a, targetId: b, typeId: SeedIds.likes);
+      cd = await g.createEdge(sourceId: c, targetId: d, typeId: SeedIds.likes);
+    });
+
+    test('addWaypoint inserts at the given place along the line', () async {
+      final w1 = await g.addWaypoint(ab, index: 0, at: const Point(200, 50));
+      final w0 = await g.addWaypoint(ab, index: 0, at: const Point(100, 50));
+      final w2 = await g.addWaypoint(ab, index: 99, at: const Point(250, 20));
+      final s = await snap();
+      expect(s.edges[ab]!.waypointIds, [w0, w1, w2]);
+      expect((s.waypoints[w0]!.x, s.waypoints[w0]!.y), (100, 50));
+    });
+
+    test('moveWaypoint saves the new spot', () async {
+      final w = await g.addWaypoint(ab, index: 0, at: const Point(100, 50));
+      await g.moveWaypoint(w, const Point(120, 70));
+      final p = (await snap()).waypoints[w]!;
+      expect((p.x, p.y), (120, 70));
+    });
+
+    test('moveNodes can move waypoints in the same write', () async {
+      final w = await g.addWaypoint(ab, index: 0, at: const Point(100, 50));
+      await g.moveNodes(
+        {a: const Point(10, 0)},
+        waypoints: {w: const Point(110, 50)},
+      );
+      final s = await snap();
+      expect(s.nodes[a]!.x, 10);
+      expect(s.waypoints[w]!.x, 110);
+    });
+
+    test('merging clamps two lines through one waypoint', () async {
+      final wab = await g.addWaypoint(ab, index: 0, at: const Point(150, 90));
+      final wcd = await g.addWaypoint(cd, index: 0, at: const Point(150, 110));
+      await g.mergeWaypoints(wcd, wab);
+      final s = await snap();
+      expect(s.edges[ab]!.waypointIds, [wab]);
+      expect(s.edges[cd]!.waypointIds, [wab]);
+      expect(s.waypoints.containsKey(wcd), isFalse);
+    });
+
+    test('merging neighbours on one line keeps the point once', () async {
+      final w0 = await g.addWaypoint(ab, index: 0, at: const Point(100, 0));
+      final w1 = await g.addWaypoint(ab, index: 1, at: const Point(110, 0));
+      await g.mergeWaypoints(w1, w0);
+      expect((await snap()).edges[ab]!.waypointIds, [w0]);
+    });
+
+    test('unclamp gives each line its own copy, nudged along it', () async {
+      final w = await g.addWaypoint(ab, index: 0, at: const Point(150, 100));
+      final other = await g.addWaypoint(cd, index: 0, at: const Point(0, 0));
+      await g.mergeWaypoints(other, w);
+
+      await g.unclampWaypoint(w, nudge: 10);
+      final s = await snap();
+      final wAb = s.edges[ab]!.waypointIds.single;
+      final wCd = s.edges[cd]!.waypointIds.single;
+      expect(wAb, isNot(wCd));
+      // A–B runs along y = 0, so its copy moves up; C–D's moves down.
+      expect(s.waypoints[wAb]!.y, closeTo(90, 1e-9));
+      expect(s.waypoints[wCd]!.y, closeTo(110, 1e-9));
+      expect(s.waypoints[wAb]!.x, closeTo(150, 1e-9));
+    });
+
+    test('unclamp refuses a waypoint only one line uses', () async {
+      final w = await g.addWaypoint(ab, index: 0, at: const Point(150, 100));
+      await expectLater(g.unclampWaypoint(w), throwsA(isA<InvalidInput>()));
+    });
+
+    test('deleteWaypoint straightens every line through it', () async {
+      final keep = await g.addWaypoint(ab, index: 0, at: const Point(50, 0));
+      final w = await g.addWaypoint(ab, index: 1, at: const Point(150, 100));
+      final other = await g.addWaypoint(cd, index: 0, at: const Point(0, 0));
+      await g.mergeWaypoints(other, w);
+
+      await g.deleteWaypoint(w);
+      final s = await snap();
+      expect(s.edges[ab]!.waypointIds, [keep]);
+      expect(s.edges[cd]!.waypointIds, isEmpty);
+      expect(s.waypoints.keys, [keep]);
+    });
+
+    test('deleting a line drops waypoints no other line uses', () async {
+      final shared = await g.addWaypoint(ab, index: 0, at: const Point(1, 1));
+      final own = await g.addWaypoint(ab, index: 1, at: const Point(2, 2));
+      final other = await g.addWaypoint(cd, index: 0, at: const Point(3, 3));
+      await g.mergeWaypoints(other, shared);
+
+      await g.deleteEdge(ab);
+      final s = await snap();
+      expect(s.waypoints.keys, [shared]);
+      expect(s.waypoints.containsKey(own), isFalse);
+    });
+  });
+
   group('delete', () {
     test(
       'deleting a node removes its edges, links and orphan waypoints',
