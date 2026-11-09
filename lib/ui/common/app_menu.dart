@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../types/types_screen.dart';
 import 'backup_ui.dart';
+import 'delete_all.dart';
 
 /// The ⋮ menu on both main screens: things used now and then, kept off the
 /// bottom bar.
@@ -38,6 +39,11 @@ class AppMenuButton extends ConsumerWidget {
         PopupMenuItem(
           value: () => importBackup(context, ref),
           child: item(Icons.file_open_outlined, 'Import backup'),
+        ),
+        const PopupMenuDivider(),
+        PopupMenuItem(
+          value: () => confirmAndDeleteAll(context, ref),
+          child: item(Icons.delete_forever_outlined, 'Delete everything'),
         ),
       ],
     );

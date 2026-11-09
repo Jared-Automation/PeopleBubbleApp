@@ -749,8 +749,9 @@ class GraphService {
   // ---------------------------------------------------------------- bulk
 
   /// Deletes every node, edge, waypoint and user-made type. Built-in types
-  /// stay. For debug tools and "replace" imports.
-  Future<void> clearAllData() => _write('clear all data', (_) async {
+  /// stay. Behind ⋮ → Delete everything, and the sample-data loaders. One
+  /// undo step.
+  Future<void> clearAllData() => _write('delete everything', (_) async {
     await _db.delete(_db.nodes).go();
     await _db.delete(_db.waypoints).go();
     // Children before parents, so foreign keys hold.
