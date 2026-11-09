@@ -6,6 +6,7 @@ import '../../domain/graph.dart';
 import '../../domain/style.dart';
 import '../../domain/types.dart';
 import '../common/type_pickers.dart';
+import '../common/undo_ui.dart';
 import 'style_fields.dart';
 import 'types_screen.dart';
 
@@ -309,7 +310,11 @@ class _TypeEditorScreenState extends ConsumerState<TypeEditorScreen> {
       } else {
         await service.deleteNodeType(type.id);
       }
-      if (mounted) Navigator.pop(context);
+      if (!mounted) return;
+      // The Types screen underneath shares this messenger, so the snackbar
+      // stays after the editor closes.
+      showUndoSnackBar(context, ref, 'Deleted type “${type.name}”');
+      Navigator.pop(context);
     } catch (e) {
       if (mounted) showGraphError(context, e);
     }

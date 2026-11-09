@@ -43,6 +43,8 @@ class AppHarness {
       ProviderScope(
         overrides: [
           databaseProvider.overrideWithValue(db),
+          // The app and the seed share one service, so one undo history.
+          graphServiceProvider.overrideWithValue(harness.service),
           sharedPreferencesProvider.overrideWithValue(prefs),
         ],
         child: const PeopleBubbleApp(),

@@ -1,28 +1,43 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../types/types_screen.dart';
+import 'backup_ui.dart';
 
 /// The ⋮ menu on both main screens: things used now and then, kept off the
 /// bottom bar.
-class AppMenuButton extends StatelessWidget {
+class AppMenuButton extends ConsumerWidget {
   const AppMenuButton({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    Widget item(IconData icon, String text) => ListTile(
+      leading: Icon(icon),
+      title: Text(text),
+      contentPadding: EdgeInsets.zero,
+    );
+
+    // The callbacks use this widget's context, not the menu's: the menu is
+    // gone by the time they run.
     return PopupMenuButton<VoidCallback>(
       tooltip: 'More',
       onSelected: (open) => open(),
-      itemBuilder: (context) => [
+      itemBuilder: (_) => [
         PopupMenuItem(
           value: () => Navigator.push(
             context,
             MaterialPageRoute<void>(builder: (_) => const TypesScreen()),
           ),
-          child: const ListTile(
-            leading: Icon(Icons.category_outlined),
-            title: Text('Types'),
-            contentPadding: EdgeInsets.zero,
-          ),
+          child: item(Icons.category_outlined, 'Types'),
+        ),
+        const PopupMenuDivider(),
+        PopupMenuItem(
+          value: () => exportBackup(context, ref),
+          child: item(Icons.ios_share, 'Export backup'),
+        ),
+        PopupMenuItem(
+          value: () => importBackup(context, ref),
+          child: item(Icons.file_open_outlined, 'Import backup'),
         ),
       ],
     );

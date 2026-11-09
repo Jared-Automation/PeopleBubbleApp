@@ -143,6 +143,18 @@ use; it may go on the Play Store later, so keep it structured like a real app.
 - Per-item overrides: the wheel's Style slices and a "Style…" button in the list edit sheet
   open the same field editor, with "Reset to type".
 
+## Safety decisions (confirmed Nov 9, 2026)
+
+- Undo/redo works on row changes: every `GraphService` write records which rows changed (before and
+  after), as one step. The history holds 50 steps, in memory only. `group()` makes several writes
+  one step (paste, sample loaders). Auto-placement folds into the step that made the bubble.
+- An undo whose rows have changed since is refused and clears the history.
+- Backup file: JSON with every table (raw rows, styles as objects), `schemaVersion` and `format`.
+  Import offers Merge (match by id, newer `updated_at` wins, identical rows kept) or Replace; either is
+  one undo step. Newer-schema files are refused; bad or dangling rows are skipped and counted.
+- Perf (S24, 300 bubbles, profile build): pan p50 about 5 ms raster, list scroll under 5 ms,
+  drag-end save 31-54 ms.
+
 ## Project setup facts
 
 - Application ID: `com.jade.peoplebubble`. Dart package: `people_bubble`.

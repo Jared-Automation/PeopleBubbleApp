@@ -16,6 +16,8 @@ import 'edit_sheet.dart';
 import 'list_row_tile.dart';
 import 'list_state.dart';
 import '../common/app_menu.dart';
+import '../common/empty_state.dart';
+import '../common/undo_ui.dart';
 
 /// The collapsible outline of everyone and everything.
 class ListScreen extends ConsumerStatefulWidget {
@@ -49,7 +51,11 @@ class _ListScreenState extends ConsumerState<ListScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('People'),
-        actions: [if (kDebugMode) const _DebugMenu(), const AppMenuButton()],
+        actions: [
+          const UndoRedoButtons(),
+          if (kDebugMode) const _DebugMenu(),
+          const AppMenuButton(),
+        ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         // Both screens live in one IndexedStack: no hero, or opening a page
@@ -62,7 +68,9 @@ class _ListScreenState extends ConsumerState<ListScreen> {
       body: switch (tree) {
         AsyncData(value: (final snapshot, final tree)) =>
           tree.rows.isEmpty
-              ? _EmptyState(onAdd: () => showAddSheet(context, parentId: null))
+              ? const EmptyGraphState(
+                  hint: 'Swipe a row for more, or drag it onto another.',
+                )
               : _buildList(snapshot, tree),
         AsyncError(:final error) => Center(
           child: Text('Database error: $error'),
@@ -80,8 +88,7 @@ class _ListScreenState extends ConsumerState<ListScreen> {
       onAdd: (row) => showAddSheet(context, parentId: row.nodeId),
       onEdit: (row) =>
           showEditSheet(context, nodeId: row.nodeId, edgeId: row.viaEdgeId),
-      onUnlink: (row) =>
-          _run(() => ref.read(graphServiceProvider).deleteEdge(row.viaEdgeId!)),
+      onUnlink: (row) => _unlink(snapshot, row),
       onDelete: (row) => confirmAndDeleteNode(context, ref, row.nodeId),
       onDrop: _drop,
       onDragStart: _startAutoScroll,
@@ -194,12 +201,32 @@ class _ListScreenState extends ConsumerState<ListScreen> {
     );
   }
 
-  Future<void> _run(Future<Object?> Function() write) async {
+  /// Runs [write], showing a refusal as a snackbar. True if it went through.
+  Future<bool> _run(Future<Object?> Function() write) async {
     try {
       await write();
+      return true;
     } catch (e) {
       if (mounted) showGraphError(context, e);
+      return false;
     }
+  }
+
+  /// Removes just the line that puts [row] under its parent.
+  Future<void> _unlink(GraphSnapshot snapshot, ListRow row) async {
+    final edgeId = row.viaEdgeId!;
+    final ok = await _run(
+      () => ref.read(graphServiceProvider).deleteEdge(edgeId),
+    );
+    if (!ok || !mounted) return;
+    final edge = snapshot.edges[edgeId];
+    final parent = snapshot.nodes[edge?.sourceId]?.label;
+    showUndoSnackBar(
+      context,
+      ref,
+      'Unlinked “${snapshot.nodes[row.nodeId]?.label}”'
+      '${parent == null ? '' : ' from “$parent”'}',
+    );
   }
 
   void _startAutoScroll() {
@@ -230,38 +257,6 @@ class _ListScreenState extends ConsumerState<ListScreen> {
   }
 }
 
-class _EmptyState extends StatelessWidget {
-  const _EmptyState({required this.onAdd});
-
-  final VoidCallback onAdd;
-
-  @override
-  Widget build(BuildContext context) => Center(
-    child: Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Text('No one here yet.', textAlign: TextAlign.center),
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: onAdd,
-            icon: const Icon(Icons.person_add),
-            label: const Text('Add your first person'),
-          ),
-          if (kDebugMode) ...[
-            const SizedBox(height: 16),
-            const Text(
-              'Debug: ⋮ → Load sample data',
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ],
-      ),
-    ),
-  );
-}
-
 /// Debug-only tools: never shown in release builds.
 class _DebugMenu extends ConsumerWidget {
   const _DebugMenu();
@@ -271,14 +266,17 @@ class _DebugMenu extends ConsumerWidget {
     final service = ref.watch(graphServiceProvider);
     return PopupMenuButton<Future<void> Function()>(
       tooltip: 'Debug tools',
+      icon: const Icon(Icons.bug_report_outlined),
       onSelected: (action) => _run(context, action),
       itemBuilder: (_) => [
         PopupMenuItem(
-          value: () => loadSampleData(service),
+          value: () =>
+              service.group('load sample data', () => loadSampleData(service)),
           child: const Text('Load sample data'),
         ),
         PopupMenuItem(
-          value: () => loadLargeSample(service),
+          value: () =>
+              service.group('load 300 bubbles', () => loadLargeSample(service)),
           child: const Text('Load 300 bubbles'),
         ),
         PopupMenuItem(

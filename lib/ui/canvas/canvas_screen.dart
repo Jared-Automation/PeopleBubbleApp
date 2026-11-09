@@ -28,6 +28,8 @@ import 'radial_wheel.dart';
 import 'waypoint_painter.dart';
 import 'rename_dialog.dart';
 import '../common/app_menu.dart';
+import '../common/empty_state.dart';
+import '../common/undo_ui.dart';
 import '../types/item_style_sheet.dart';
 
 /// World (0, 0) sits in the middle of a huge canvas child, so the world can
@@ -222,6 +224,7 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
       appBar: AppBar(
         title: const Text('Bubbles'),
         actions: [
+          const UndoRedoButtons(),
           _SettingsMenu(settings: settings),
           const AppMenuButton(),
         ],
@@ -237,8 +240,8 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
       body: switch (snapshot) {
         AsyncData(:final value) =>
           value.nodes.isEmpty
-              ? const Center(
-                  child: Text('Nothing here yet. Add people from the List.'),
+              ? const EmptyGraphState(
+                  hint: 'Here they become bubbles: long-press one for actions.',
                 )
               : _buildCanvas(value, settings),
         AsyncError(:final error) => Center(
@@ -927,8 +930,7 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
     WheelItem(
       label: 'Delete',
       icon: Icons.delete_outline,
-      onSelected: () =>
-          _run(() => ref.read(graphServiceProvider).deleteWaypoint(id)),
+      onSelected: () => _deleteWaypoint(id),
     ),
   ];
 
@@ -996,11 +998,17 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
   }
 
   Future<void> _deleteEdge(String id) async {
-    await _run(() => ref.read(graphServiceProvider).deleteEdge(id));
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(const SnackBar(content: Text('Line deleted')));
+    if (!await _run(() => ref.read(graphServiceProvider).deleteEdge(id))) {
+      return;
+    }
+    if (mounted) showUndoSnackBar(context, ref, 'Line deleted');
+  }
+
+  Future<void> _deleteWaypoint(String id) async {
+    if (!await _run(() => ref.read(graphServiceProvider).deleteWaypoint(id))) {
+      return;
+    }
+    if (mounted) showUndoSnackBar(context, ref, 'Waypoint deleted');
   }
 
   /// New bubbles from the clipboard's text, one per line, stacked at [at].
@@ -1019,17 +1027,19 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
       return;
     }
     final service = ref.read(graphServiceProvider);
-    await _run(() async {
-      for (final (i, name) in names.indexed) {
-        await service.createNode(
-          label: name,
-          typeIds: [SeedIds.person],
-          x: at.x,
-          y: at.y + 80.0 * i,
-        );
-      }
-    });
-    if (!mounted) return;
+    final ok = await _run(
+      () => service.group('paste ${names.length} bubbles', () async {
+        for (final (i, name) in names.indexed) {
+          await service.createNode(
+            label: name,
+            typeIds: [SeedIds.person],
+            x: at.x,
+            y: at.y + 80.0 * i,
+          );
+        }
+      }),
+    );
+    if (!ok || !mounted) return;
     messenger.showSnackBar(
       SnackBar(
         content: Text(
@@ -1039,11 +1049,14 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
     );
   }
 
-  Future<void> _run(Future<void> Function() write) async {
+  /// Runs [write], showing a refusal as a snackbar. True if it went through.
+  Future<bool> _run(Future<void> Function() write) async {
     try {
       await write();
+      return true;
     } catch (e) {
       if (mounted) showGraphError(context, e);
+      return false;
     }
   }
 

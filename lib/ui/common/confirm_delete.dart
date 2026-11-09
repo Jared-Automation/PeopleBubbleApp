@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/providers.dart';
 import 'type_pickers.dart';
+import 'undo_ui.dart';
 
 /// Asks before deleting a bubble everywhere, saying how many lines go with
 /// it, then deletes. Shared by the list and the canvas so they can't drift.
@@ -43,6 +44,9 @@ Future<void> confirmAndDeleteNode(
   if (!(ok ?? false)) return;
   try {
     await ref.read(graphServiceProvider).deleteNode(nodeId);
+    if (context.mounted) {
+      showUndoSnackBar(context, ref, 'Deleted “${node.label}”');
+    }
   } catch (e) {
     if (context.mounted) showGraphError(context, e);
   }

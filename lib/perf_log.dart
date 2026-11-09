@@ -6,12 +6,13 @@ import 'package:flutter/widgets.dart';
 ///     flutter run --profile --dart-define=PERF_LOG=true
 ///
 /// Every 120 frames it prints build (UI thread) and raster (GPU thread) times
-/// to the device log (`adb logcat | grep PERF`). A frame must finish both in
+/// to the device log (`adb logcat | grep PERF`). `GraphService` also logs
+/// how long each save takes. A frame must finish both in
 /// about 16 ms (60 Hz) or 8 ms (120 Hz) to be smooth.
-const _enabled = bool.fromEnvironment('PERF_LOG');
+const perfLogEnabled = bool.fromEnvironment('PERF_LOG');
 
 void startPerfLogIfEnabled() {
-  if (!_enabled) return;
+  if (!perfLogEnabled) return;
   final batch = <FrameTiming>[];
   SchedulerBinding.instance.addTimingsCallback((timings) {
     batch.addAll(timings);
