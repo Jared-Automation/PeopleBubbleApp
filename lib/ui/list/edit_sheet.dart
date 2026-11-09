@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/providers.dart';
 import '../../services/graph_service.dart';
 import '../common/type_pickers.dart';
+import '../types/item_style_sheet.dart';
 
 /// Opens the edit sheet for a bubble and, if given, the line above it.
 Future<void> showEditSheet(
@@ -97,6 +98,25 @@ class _EditSheetState extends ConsumerState<EditSheet> {
                   ),
                 ),
               ],
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.palette_outlined),
+                    label: const Text('Bubble style…'),
+                    onPressed: () =>
+                        showItemStyleSheet(context, nodeId: _node.id),
+                  ),
+                  if (_edge != null)
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.palette_outlined),
+                      label: const Text('Line style…'),
+                      onPressed: () =>
+                          showItemStyleSheet(context, edgeId: _edge.id),
+                    ),
+                ],
+              ),
               if (_error != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 12),

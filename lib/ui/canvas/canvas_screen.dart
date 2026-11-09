@@ -27,6 +27,8 @@ import 'grid_painter.dart';
 import 'radial_wheel.dart';
 import 'waypoint_painter.dart';
 import 'rename_dialog.dart';
+import '../common/app_menu.dart';
+import '../types/item_style_sheet.dart';
 
 /// World (0, 0) sits in the middle of a huge canvas child, so the world can
 /// extend this far in every direction without the child ever resizing.
@@ -219,9 +221,15 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
     return Scaffold(
       appBar: AppBar(
         title: const Text('Bubbles'),
-        actions: [_SettingsMenu(settings: settings)],
+        actions: [
+          _SettingsMenu(settings: settings),
+          const AppMenuButton(),
+        ],
       ),
       floatingActionButton: FloatingActionButton.small(
+        // Both screens live in one IndexedStack: no hero, or opening a page
+        // finds two buttons with the same default hero tag.
+        heroTag: null,
         tooltip: 'Zoom to fit',
         onPressed: () => _fit(animate: true),
         child: const Icon(Icons.fit_screen),
@@ -848,10 +856,10 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
       label: 'More',
       icon: Icons.more_horiz,
       more: [
-        const WheelItem(
+        WheelItem(
           label: 'Style',
           icon: Icons.palette_outlined,
-          comingSoon: true,
+          onSelected: () => showItemStyleSheet(context, nodeId: id),
         ),
         WheelItem(
           label: 'Subtree',
@@ -892,10 +900,10 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
       label: 'More',
       icon: Icons.more_horiz,
       more: [
-        const WheelItem(
+        WheelItem(
           label: 'Style',
           icon: Icons.palette_outlined,
-          comingSoon: true,
+          onSelected: () => showItemStyleSheet(context, edgeId: id),
         ),
         WheelItem(
           label: 'Reverse',

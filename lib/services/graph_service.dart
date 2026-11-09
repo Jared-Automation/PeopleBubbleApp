@@ -543,6 +543,89 @@ class GraphService {
     );
   });
 
+  /// Deletes a user-made node type. Bubbles lose it (falling back to base
+  /// `Node` if it was their only type) and its subtypes move up to its
+  /// parent. Built-in types can't be deleted.
+  Future<void> deleteNodeType(String id) => _write((s) async {
+    final type = _requireDeletableType(s.nodeTypes, id);
+    await (_db.update(
+      _db.nodeTypes,
+    )..where((t) => t.parentId.equals(id))).write(
+      NodeTypesCompanion(
+        parentId: Value(type.parentId),
+        updatedAt: Value(DateTime.now()),
+      ),
+    );
+    await (_db.delete(
+      _db.nodeTypeLinks,
+    )..where((l) => l.typeId.equals(id))).go();
+    await (_db.delete(_db.nodeTypes)..where((t) => t.id.equals(id))).go();
+  });
+
+  /// Deletes a user-made line type. Its lines and subtypes move to its
+  /// parent type. Refused if that would make lines form a loop (the parent
+  /// can be hierarchical where this type wasn't).
+  Future<void> deleteEdgeType(String id) => _write((s) async {
+    final type = _requireDeletableType(s.edgeTypes, id);
+    final parentId = type.parentId!;
+    final types = s.edgeTypes;
+    final after = GraphSnapshot(
+      nodes: s.nodes.values,
+      edges: [
+        for (final e in s.edges.values)
+          e.typeId != id
+              ? e
+              : GraphEdge(
+                  id: e.id,
+                  sourceId: e.sourceId,
+                  targetId: e.targetId,
+                  typeId: parentId,
+                  label: e.label,
+                  waypointIds: e.waypointIds,
+                  overrides: e.overrides,
+                ),
+      ],
+      nodeTypes: s.nodeTypes,
+      edgeTypes: TypeHierarchy(
+        [
+          for (final t in types.byId.values)
+            if (t.id != id)
+              t.parentId == id ? t.copyWith(parentId: parentId) : t,
+        ],
+        appDefaults: types.appDefaults,
+        empty: types.empty,
+      ),
+    );
+    if (graphHasCycle(_hierarchicalPairs(after))) {
+      throw const CycleBlocked(
+        'Deleting this type would turn its lines into ones that form a loop '
+        '(something would end up inside itself).',
+      );
+    }
+    final now = DateTime.now();
+    await (_db.update(_db.edges)..where((e) => e.typeId.equals(id))).write(
+      EdgesCompanion(typeId: Value(parentId), updatedAt: Value(now)),
+    );
+    await (_db.update(
+      _db.edgeTypes,
+    )..where((t) => t.parentId.equals(id))).write(
+      EdgeTypesCompanion(parentId: Value(parentId), updatedAt: Value(now)),
+    );
+    await (_db.delete(_db.edgeTypes)..where((t) => t.id.equals(id))).go();
+  });
+
+  TypeDef<S> _requireDeletableType<S extends Style<S>>(
+    TypeHierarchy<S> types,
+    String id,
+  ) {
+    final type = types.byId[id];
+    if (type == null) throw const InvalidInput('That type no longer exists.');
+    if (type.builtIn || type.isBase) {
+      throw InvalidInput("${type.name} is built in, so it can't be deleted.");
+    }
+    return type;
+  }
+
   // ---------------------------------------------------------------- bulk
 
   /// Deletes every node, edge, waypoint and user-made type. Built-in types

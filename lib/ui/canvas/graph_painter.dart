@@ -136,7 +136,7 @@ class GraphPainter extends CustomPainter {
   ) {
     const gap = 5.0;
     canvas.drawPath(
-      _shapePath(style.shape!, inflate(box, gap)),
+      shapePath(style.shape!, inflate(box, gap)),
       Paint()
         ..color = highlight
         ..strokeWidth = 3
@@ -214,41 +214,7 @@ class GraphPainter extends CustomPainter {
     GraphNode node,
     NodeStyle style,
     Rectangle<double> box,
-  ) {
-    final rect = Rect.fromLTWH(box.left, box.top, box.width, box.height);
-    final shape = _shapePath(style.shape!, box);
-    canvas.drawPath(shape, Paint()..color = Color(style.fillColor!));
-    final outlineWidth = style.outlineWidth!;
-    if (outlineWidth > 0) {
-      canvas.drawPath(
-        dashed(shape, style.outlineStyle!, outlineWidth),
-        Paint()
-          ..color = Color(style.outlineColor!)
-          ..strokeWidth = outlineWidth
-          ..style = PaintingStyle.stroke
-          ..strokeCap = style.outlineStyle == LineStyle.dotted
-              ? StrokeCap.round
-              : StrokeCap.butt,
-      );
-    }
-    final text = cache.node(node.label, style).text;
-    text.paint(canvas, rect.center - Offset(text.width / 2, text.height / 2));
-  }
-
-  Path _shapePath(NodeShape shape, Rectangle<double> box) {
-    final rect = Rect.fromLTWH(box.left, box.top, box.width, box.height);
-    return switch (shape) {
-      NodeShape.roundedRect =>
-        Path()..addRRect(
-          RRect.fromRectAndRadius(
-            rect,
-            Radius.circular(roundedCornerRadius(box)),
-          ),
-        ),
-      NodeShape.rectangle => Path()..addRect(rect),
-      NodeShape.ellipse || NodeShape.circle => Path()..addOval(rect),
-    };
-  }
+  ) => paintBubble(canvas, style, box, cache.node(node.label, style).text);
 
   @override
   bool shouldRepaint(GraphPainter old) =>
@@ -258,6 +224,88 @@ class GraphPainter extends CustomPainter {
       old.group != group ||
       old.labelBackground != labelBackground ||
       old.highlight != highlight;
+}
+
+/// Draws one bubble: its shape filled, its outline, and its laid-out
+/// [text] centred. Shared by the canvas and the type previews.
+void paintBubble(
+  Canvas canvas,
+  NodeStyle style,
+  Rectangle<double> box,
+  TextPainter text,
+) {
+  final rect = Rect.fromLTWH(box.left, box.top, box.width, box.height);
+  final shape = shapePath(style.shape!, box);
+  canvas.drawPath(shape, Paint()..color = Color(style.fillColor!));
+  final outlineWidth = style.outlineWidth!;
+  if (outlineWidth > 0) {
+    canvas.drawPath(
+      dashed(shape, style.outlineStyle!, outlineWidth),
+      Paint()
+        ..color = Color(style.outlineColor!)
+        ..strokeWidth = outlineWidth
+        ..style = PaintingStyle.stroke
+        ..strokeCap = style.outlineStyle == LineStyle.dotted
+            ? StrokeCap.round
+            : StrokeCap.butt,
+    );
+  }
+  text.paint(canvas, rect.center - Offset(text.width / 2, text.height / 2));
+}
+
+/// A straight line sample in [style] from [from] to [to], with its
+/// arrowhead. For the type previews.
+void paintLineSample(Canvas canvas, EdgeStyle style, Offset from, Offset to) {
+  final width = style.width!;
+  final color = Color(style.color!);
+  final hasArrow = style.arrowhead == Arrowhead.end;
+  final arrowSize = 6 + 2 * width;
+  final d = to - from;
+  final u = d / d.distance;
+  final end = hasArrow ? to - u * arrowSize : to;
+  canvas.drawPath(
+    dashed(
+      Path()
+        ..moveTo(from.dx, from.dy)
+        ..lineTo(end.dx, end.dy),
+      style.lineStyle!,
+      width,
+    ),
+    Paint()
+      ..color = color
+      ..strokeWidth = width
+      ..style = PaintingStyle.stroke
+      ..strokeCap = style.lineStyle == LineStyle.dotted
+          ? StrokeCap.round
+          : StrokeCap.butt,
+  );
+  if (hasArrow) {
+    final side = Offset(-u.dy, u.dx) * (arrowSize / 2);
+    canvas.drawPath(
+      Path()
+        ..moveTo(to.dx, to.dy)
+        ..lineTo(end.dx + side.dx, end.dy + side.dy)
+        ..lineTo(end.dx - side.dx, end.dy - side.dy)
+        ..close(),
+      Paint()..color = color,
+    );
+  }
+}
+
+/// The outline of [shape] drawn in [box].
+Path shapePath(NodeShape shape, Rectangle<double> box) {
+  final rect = Rect.fromLTWH(box.left, box.top, box.width, box.height);
+  return switch (shape) {
+    NodeShape.roundedRect =>
+      Path()..addRRect(
+        RRect.fromRectAndRadius(
+          rect,
+          Radius.circular(roundedCornerRadius(box)),
+        ),
+      ),
+    NodeShape.rectangle => Path()..addRect(rect),
+    NodeShape.ellipse || NodeShape.circle => Path()..addOval(rect),
+  };
 }
 
 /// [source] broken into dashes or dots. `Canvas` has no dash support, so

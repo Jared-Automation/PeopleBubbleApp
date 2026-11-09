@@ -15,6 +15,7 @@ import 'add_sheet.dart';
 import 'edit_sheet.dart';
 import 'list_row_tile.dart';
 import 'list_state.dart';
+import '../common/app_menu.dart';
 
 /// The collapsible outline of everyone and everything.
 class ListScreen extends ConsumerStatefulWidget {
@@ -48,9 +49,12 @@ class _ListScreenState extends ConsumerState<ListScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('People'),
-        actions: [if (kDebugMode) const _DebugMenu()],
+        actions: [if (kDebugMode) const _DebugMenu(), const AppMenuButton()],
       ),
       floatingActionButton: FloatingActionButton.extended(
+        // Both screens live in one IndexedStack: no hero, or opening a page
+        // finds two buttons with the same default hero tag.
+        heroTag: null,
         onPressed: () => showAddSheet(context, parentId: null),
         icon: const Icon(Icons.person_add),
         label: const Text('Add person'),

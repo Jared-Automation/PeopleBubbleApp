@@ -471,6 +471,83 @@ void main() {
     );
   });
 
+  group('deleting types', () {
+    test('bubbles lose the type and subtypes move up', () async {
+      final fan = await g.createNodeType(
+        name: 'Fan',
+        parentId: SeedIds.person,
+        style: const NodeStyle(fillColor: 0xFFFFEB3B),
+      );
+      final superFan = await g.createNodeType(name: 'Superfan', parentId: fan);
+      final a = await g.createNode(label: 'A', typeIds: [fan]);
+      final b = await g.createNode(label: 'B', typeIds: [superFan]);
+      final gamer = await g.createNodeType(
+        name: 'Gamer',
+        parentId: SeedIds.person,
+        style: const NodeStyle(outlineStyle: LineStyle.dotted),
+      );
+      final c = await g.createNode(label: 'C', typeIds: [fan, gamer]);
+
+      await g.deleteNodeType(fan);
+      final s = await snap();
+      expect(s.nodeTypes.byId.containsKey(fan), isFalse);
+      expect(s.nodeTypes.byId[superFan]!.parentId, SeedIds.person);
+      expect(s.nodes[a]!.typeIds, isEmpty, reason: 'falls back to Node');
+      expect(s.nodes[b]!.typeIds, [superFan]);
+      expect(s.nodes[c]!.typeIds, [gamer]);
+      expect(
+        s.styleOf(s.nodes[b]!).fillColor,
+        isNot(0xFFFFEB3B),
+        reason: 'lost Fan style',
+      );
+    });
+
+    test('lines move to the parent type, subtypes move up', () async {
+      final adores = await g.createEdgeType(
+        name: 'Adores',
+        parentId: SeedIds.loves,
+      );
+      final reallyAdores = await g.createEdgeType(
+        name: 'Really adores',
+        parentId: adores,
+      );
+      final a = await g.createNode(label: 'A');
+      final b = await g.createNode(label: 'B');
+      final e = await g.createEdge(sourceId: a, targetId: b, typeId: adores);
+
+      await g.deleteEdgeType(adores);
+      final s = await snap();
+      expect(s.edges[e]!.typeId, SeedIds.loves);
+      expect(s.edgeTypes.byId[reallyAdores]!.parentId, SeedIds.loves);
+    });
+
+    test('refused when the moved lines would form a loop', () async {
+      final loose = await g.createEdgeType(
+        name: 'Loose',
+        parentId: SeedIds.likes,
+        style: const EdgeStyle(hierarchical: false),
+      );
+      final a = await g.createNode(label: 'A');
+      final b = await g.createNode(label: 'B');
+      await g.createEdge(sourceId: a, targetId: b, typeId: SeedIds.likes);
+      // Fine while Loose isn't hierarchical...
+      await g.createEdge(sourceId: b, targetId: a, typeId: loose);
+      // ...but as Likes it would close A → B → A.
+      await expectLater(g.deleteEdgeType(loose), throwsA(isA<CycleBlocked>()));
+      expect((await snap()).edgeTypes.byId.containsKey(loose), isTrue);
+    });
+
+    test('built-in types cannot be deleted', () async {
+      for (final id in [SeedIds.person, SeedIds.nodeBase]) {
+        await expectLater(g.deleteNodeType(id), throwsA(isA<InvalidInput>()));
+      }
+      await expectLater(
+        g.deleteEdgeType(SeedIds.likes),
+        throwsA(isA<InvalidInput>()),
+      );
+    });
+  });
+
   group('type edits', () {
     test(
       'an edit that would break existing nodes is blocked and lists them',

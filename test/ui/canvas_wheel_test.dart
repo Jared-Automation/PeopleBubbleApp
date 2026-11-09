@@ -124,7 +124,7 @@ void main() {
     expect(s.nodes.values.firstWhere((n) => n.label == 'Jazz').x, 600);
   });
 
-  testWidgets('a "coming soon" slice says so and does nothing', (tester) async {
+  testWidgets('More → Style opens the bubble style sheet', (tester) async {
     await openCanvas(tester);
     final finger = await longPress(tester, screenOf(tester, const Point(0, 0)));
     await finger.up();
@@ -132,8 +132,9 @@ void main() {
     await tester.tapAt(slice(tester, 'More'));
     await tester.pumpAndSettle();
     await tester.tapAt(slice(tester, 'Style'));
-    await tester.pump();
-    expect(find.text('Style is coming in a later phase.'), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.text('Style: Sam'), findsOneWidget);
+    expect(find.text('Reset to type'), findsOneWidget);
   });
 
   testWidgets('line wheel: More → Reverse swaps the ends', (tester) async {

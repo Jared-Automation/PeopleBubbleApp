@@ -124,6 +124,24 @@ use; it may go on the Play Store later, so keep it structured like a real app.
 - The line wheel's Waypoint slice adds a waypoint at the pressed spot; slice positions stay.
 - Clamping: drop a waypoint within ~24 dp of another to merge them. Unclamp gives each line
   its own copy, nudged apart. Delete removes the waypoint from every line using it.
+- Hit testing: inside a bubble's real shape the bubble wins; in the 48 dp padding around a
+  small bubble, a nearer line wins (so lines stay selectable when zoomed out).
+
+## Type-editor decisions (confirmed Nov 8, 2026)
+
+- The Types screen opens from a ⋮ menu on both main screens (no third tab).
+- Seeded types (Person, Thing, Likes, Loves, Dislikes, Related) can be renamed and restyled
+  but not deleted; base `Node` / `Edge` likewise.
+- Deleting a type in use is allowed after a confirm that says what changes: bubbles lose the
+  type (falling back to base `Node`), lines move to the parent type, subtypes move up to the
+  parent. Refused if the moved lines would form a loop.
+- Fonts: Android system families only (default, serif, monospace, cursive, casual).
+- Colours: ~20 preset swatches plus a hex field.
+- Bubble width/height are minimums; long names still grow the bubble.
+- Each style field has an "inherit" state; the editor previews live and blocks Save (listing
+  the bubbles) when an edit would create type conflicts.
+- Per-item overrides: the wheel's Style slices and a "Style…" button in the list edit sheet
+  open the same field editor, with "Reset to type".
 
 ## Project setup facts
 
