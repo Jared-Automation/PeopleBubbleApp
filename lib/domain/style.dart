@@ -37,6 +37,7 @@ class NodeStyle implements Style<NodeStyle> {
     this.outlineColor,
     this.outlineWidth,
     this.outlineStyle,
+    this.hidden,
   });
 
   /// Builds a style from [setFields]-shaped JSON. Unknown keys and values of
@@ -53,6 +54,7 @@ class NodeStyle implements Style<NodeStyle> {
     outlineColor: _int(json['outlineColor']),
     outlineWidth: _double(json['outlineWidth']),
     outlineStyle: _enum(LineStyle.values, json['outlineStyle']),
+    hidden: _bool(json['hidden']),
   );
 
   static const empty = NodeStyle();
@@ -70,6 +72,7 @@ class NodeStyle implements Style<NodeStyle> {
     outlineColor: 0xFF757575,
     outlineWidth: 1.5,
     outlineStyle: LineStyle.solid,
+    hidden: false,
   );
 
   final String? fontFamily;
@@ -84,6 +87,10 @@ class NodeStyle implements Style<NodeStyle> {
   final double? outlineWidth;
   final LineStyle? outlineStyle;
 
+  /// Greys out everything under this bubble until it, or something under
+  /// it, is selected (or "Show hidden" is on). The bubble itself stays.
+  final bool? hidden;
+
   @override
   NodeStyle mergeOver(NodeStyle base) => NodeStyle(
     fontFamily: fontFamily ?? base.fontFamily,
@@ -97,6 +104,7 @@ class NodeStyle implements Style<NodeStyle> {
     outlineColor: outlineColor ?? base.outlineColor,
     outlineWidth: outlineWidth ?? base.outlineWidth,
     outlineStyle: outlineStyle ?? base.outlineStyle,
+    hidden: hidden ?? base.hidden,
   );
 
   @override
@@ -112,6 +120,7 @@ class NodeStyle implements Style<NodeStyle> {
     'outlineColor': ?outlineColor,
     'outlineWidth': ?outlineWidth,
     'outlineStyle': ?outlineStyle?.name,
+    'hidden': ?hidden,
   };
 
   Map<String, Object> toJson() => setFields;

@@ -45,6 +45,8 @@ class ListRowTile extends StatelessWidget {
     required this.snapshot,
     required this.actions,
     this.highlighted = false,
+    this.greyed = false,
+    this.hider = false,
   });
 
   final ListRow row;
@@ -52,10 +54,22 @@ class ListRowTile extends StatelessWidget {
   final ListRowActions actions;
   final bool highlighted;
 
+  /// Under a hidden bubble (and "Show hidden" is off): drawn faint.
+  final bool greyed;
+
+  /// This bubble is marked hidden: shows an eye-off icon.
+  final bool hider;
+
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    final content = _RowContent(row: row, snapshot: snapshot, actions: actions);
+    final content = _RowContent(
+      row: row,
+      snapshot: snapshot,
+      actions: actions,
+      greyed: greyed,
+      hider: hider,
+    );
 
     if (row.isShadow) {
       return Slidable(
@@ -103,7 +117,9 @@ class ListRowTile extends StatelessWidget {
         onDragUpdate: (d) => actions.onDragUpdate(d.globalPosition),
         onDragEnd: (_) => actions.onDragEnd(),
         onDraggableCanceled: (_, _) => actions.onDragEnd(),
-        feedback: _DragFeedback(label: snapshot.nodes[row.nodeId]!.label),
+        feedback: _DragFeedback(
+          label: greyed ? '•••' : snapshot.nodes[row.nodeId]!.label,
+        ),
         childWhenDragging: Opacity(opacity: 0.4, child: content),
         child: tile,
       ),
@@ -130,11 +146,15 @@ class _RowContent extends StatelessWidget {
     required this.row,
     required this.snapshot,
     required this.actions,
+    required this.greyed,
+    required this.hider,
   });
 
   final ListRow row;
   final GraphSnapshot snapshot;
   final ListRowActions actions;
+  final bool greyed;
+  final bool hider;
 
   @override
   Widget build(BuildContext context) {
@@ -143,8 +163,9 @@ class _RowContent extends StatelessWidget {
     final edge = row.viaEdgeId == null ? null : snapshot.edges[row.viaEdgeId];
     final theme = Theme.of(context);
 
+    // Under a hidden bubble: no name until revealed (Show hidden).
     final label = Text(
-      node.label,
+      greyed ? '•••' : node.label,
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
       style: theme.textTheme.bodyLarge?.copyWith(
@@ -189,7 +210,15 @@ class _RowContent extends StatelessWidget {
             child: Row(
               children: [
                 Flexible(child: label),
-                if (edge != null) ...[
+                if (hider)
+                  const Padding(
+                    padding: EdgeInsets.only(left: 6),
+                    child: Tooltip(
+                      message: 'What’s under this is hidden',
+                      child: Icon(Icons.visibility_off, size: 18),
+                    ),
+                  ),
+                if (edge != null && !greyed) ...[
                   const SizedBox(width: 8),
                   // Capped so a long line label can't squeeze the name; the
                   // name gets all the remaining room.
@@ -218,7 +247,7 @@ class _RowContent extends StatelessWidget {
           if (!row.isShadow)
             IconButton(
               icon: const Icon(Icons.add),
-              tooltip: 'Add under ${node.label}',
+              tooltip: greyed ? 'Add under this' : 'Add under ${node.label}',
               onPressed: () => actions.onAdd(row),
             ),
         ],
@@ -231,7 +260,14 @@ class _RowContent extends StatelessWidget {
           : row.hasChildren
           ? () => actions.onToggle(row)
           : null,
-      child: Opacity(opacity: row.isShadow ? 0.55 : 1, child: body),
+      child: Opacity(
+        opacity: greyed
+            ? 0.3
+            : row.isShadow
+            ? 0.55
+            : 1,
+        child: body,
+      ),
     );
   }
 }

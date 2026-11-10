@@ -1,5 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../data/providers.dart';
+import '../../domain/hidden.dart';
 import '../../domain/hit_test.dart';
 import '../list/list_state.dart';
 
@@ -37,6 +39,7 @@ class CanvasSettings {
     required this.dimUnrelated,
     required this.snapToGrid,
     required this.smoothLines,
+    required this.showHidden,
   });
 
   /// Dim everything not connected to the selection.
@@ -48,14 +51,20 @@ class CanvasSettings {
   /// Draw lines as curves through their waypoints instead of corners.
   final bool smoothLines;
 
+  /// Show what's under hidden bubbles at full strength, on both screens.
+  /// Toggled from the ⋮ menu.
+  final bool showHidden;
+
   CanvasSettings copyWith({
     bool? dimUnrelated,
     bool? snapToGrid,
     bool? smoothLines,
+    bool? showHidden,
   }) => CanvasSettings(
     dimUnrelated: dimUnrelated ?? this.dimUnrelated,
     snapToGrid: snapToGrid ?? this.snapToGrid,
     smoothLines: smoothLines ?? this.smoothLines,
+    showHidden: showHidden ?? this.showHidden,
   );
 }
 
@@ -63,7 +72,8 @@ class CanvasSettings {
 class CanvasSettingsNotifier extends Notifier<CanvasSettings> {
   static const _dimKey = 'canvas.dimUnrelated',
       _snapKey = 'canvas.snapToGrid',
-      _smoothKey = 'canvas.smoothLines';
+      _smoothKey = 'canvas.smoothLines',
+      _showHiddenKey = 'canvas.showHidden';
 
   @override
   CanvasSettings build() {
@@ -72,6 +82,7 @@ class CanvasSettingsNotifier extends Notifier<CanvasSettings> {
       dimUnrelated: prefs.getBool(_dimKey) ?? true,
       snapToGrid: prefs.getBool(_snapKey) ?? false,
       smoothLines: prefs.getBool(_smoothKey) ?? false,
+      showHidden: prefs.getBool(_showHiddenKey) ?? false,
     );
   }
 
@@ -89,7 +100,19 @@ class CanvasSettingsNotifier extends Notifier<CanvasSettings> {
     ref.read(sharedPreferencesProvider).setBool(_smoothKey, value);
     state = state.copyWith(smoothLines: value);
   }
+
+  void setShowHidden(bool value) {
+    ref.read(sharedPreferencesProvider).setBool(_showHiddenKey, value);
+    state = state.copyWith(showHidden: value);
+  }
 }
+
+/// Which bubbles sit under hidden ones, recomputed only when the data
+/// changes (not on every selection).
+final hiddenGroupsProvider = Provider<HiddenGroups?>((ref) {
+  final snapshot = ref.watch(graphSnapshotProvider).value;
+  return snapshot == null ? null : HiddenGroups.of(snapshot);
+});
 
 final canvasSettingsProvider =
     NotifierProvider<CanvasSettingsNotifier, CanvasSettings>(

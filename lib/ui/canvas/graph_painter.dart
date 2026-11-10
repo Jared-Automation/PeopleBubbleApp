@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show setEquals;
+import 'package:flutter/material.dart' show Icons;
 import 'package:flutter/rendering.dart';
 
 import '../../domain/geometry.dart';
@@ -24,6 +26,9 @@ class GraphPainter extends CustomPainter {
     this.selection,
     this.dimUnrelated = true,
     this.group = const {},
+    this.greyedNodes = const {},
+    this.greyedEdges = const {},
+    this.hiders = const {},
   });
 
   final CanvasScene scene;
@@ -43,6 +48,13 @@ class GraphPainter extends CustomPainter {
   /// A multi-bubble selection ("Select subtree"), ringed like [selection].
   final Set<String> group;
 
+  /// Bubbles and lines under a hidden bubble, drawn faint.
+  final Set<String> greyedNodes;
+  final Set<String> greyedEdges;
+
+  /// Bubbles marked hidden; they get an eye-off badge.
+  final Set<String> hiders;
+
   GraphSnapshot get snapshot => scene.snapshot;
 
   @override
@@ -54,18 +66,41 @@ class GraphPainter extends CustomPainter {
     final focus = (selected == null && group.isEmpty) || !dimUnrelated
         ? null
         : _focusOf(selected);
-    bool nodeBright(String id) => focus == null || focus.nodes.contains(id);
-    bool edgeBright(String id) => focus == null || focus.edges.contains(id);
+    bool nodeBright(String id) =>
+        !greyedNodes.contains(id) &&
+        (focus == null || focus.nodes.contains(id));
+    bool edgeBright(String id) =>
+        !greyedEdges.contains(id) &&
+        (focus == null || focus.edges.contains(id));
 
-    // Dimmed items go into one translucent layer: far cheaper than fading
-    // hundreds of items one by one.
+    // Faded items go into translucent layers: far cheaper than fading
+    // hundreds of items one by one. Hidden groups are the faintest, and
+    // drawn without any text, so they can't be read until revealed.
+    if (greyedNodes.isNotEmpty || greyedEdges.isNotEmpty) {
+      canvas.saveLayer(null, Paint()..color = const Color(0x33000000));
+      for (final e in scene.edges) {
+        if (greyedEdges.contains(e.edge.id)) {
+          _paintEdge(canvas, e, withLabel: false);
+        }
+      }
+      for (final n in scene.nodes.values) {
+        if (greyedNodes.contains(n.node.id)) {
+          _paintNode(canvas, n.node, n.style, n.box, withText: false);
+        }
+      }
+      canvas.restore();
+    }
     if (focus != null) {
       canvas.saveLayer(null, Paint()..color = const Color(0x40000000));
       for (final e in scene.edges) {
-        if (!edgeBright(e.edge.id)) _paintEdge(canvas, e);
+        final id = e.edge.id;
+        if (!edgeBright(id) && !greyedEdges.contains(id)) _paintEdge(canvas, e);
       }
       for (final n in scene.nodes.values) {
-        if (!nodeBright(n.node.id)) _paintNode(canvas, n.node, n.style, n.box);
+        final id = n.node.id;
+        if (!nodeBright(id) && !greyedNodes.contains(id)) {
+          _paintNode(canvas, n.node, n.style, n.box);
+        }
       }
       canvas.restore();
     }
@@ -144,7 +179,7 @@ class GraphPainter extends CustomPainter {
     );
   }
 
-  void _paintEdge(Canvas canvas, SceneEdge e) {
+  void _paintEdge(Canvas canvas, SceneEdge e, {bool withLabel = true}) {
     final edge = e.edge;
     final points = e.path;
     final to = points.last;
@@ -192,7 +227,7 @@ class GraphPainter extends CustomPainter {
       );
     }
 
-    final label = edge.label;
+    final label = withLabel ? edge.label : null;
     if (label != null) {
       final text = cache.edgeLabel(label, style.color!);
       final mid = Offset(e.label.x, e.label.y);
@@ -213,8 +248,46 @@ class GraphPainter extends CustomPainter {
     Canvas canvas,
     GraphNode node,
     NodeStyle style,
-    Rectangle<double> box,
-  ) => paintBubble(canvas, style, box, cache.node(node.label, style).text);
+    Rectangle<double> box, {
+    bool withText = true,
+  }) {
+    paintBubble(
+      canvas,
+      style,
+      box,
+      withText ? cache.node(node.label, style).text : null,
+    );
+    if (hiders.contains(node.id)) _paintHiddenBadge(canvas, box);
+  }
+
+  static final _eyeOff = TextPainter(
+    text: TextSpan(
+      text: String.fromCharCode(Icons.visibility_off.codePoint),
+      style: TextStyle(
+        fontFamily: Icons.visibility_off.fontFamily,
+        package: Icons.visibility_off.fontPackage,
+        fontSize: 12,
+        color: const Color(0xFF616161),
+      ),
+    ),
+    textDirection: TextDirection.ltr,
+  )..layout();
+
+  /// A small eye-off disc on the top-right corner: "what's under this is
+  /// hidden".
+  void _paintHiddenBadge(Canvas canvas, Rectangle<double> box) {
+    final c = Offset(box.left + box.width - 4, box.top + 4);
+    canvas.drawCircle(c, 10, Paint()..color = const Color(0xFFFFFFFF));
+    canvas.drawCircle(
+      c,
+      10,
+      Paint()
+        ..color = const Color(0xFF9E9E9E)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+    _eyeOff.paint(canvas, c - Offset(_eyeOff.width / 2, _eyeOff.height / 2));
+  }
 
   @override
   bool shouldRepaint(GraphPainter old) =>
@@ -222,17 +295,20 @@ class GraphPainter extends CustomPainter {
       old.selection != selection ||
       old.dimUnrelated != dimUnrelated ||
       old.group != group ||
+      !setEquals(old.greyedNodes, greyedNodes) ||
+      !setEquals(old.greyedEdges, greyedEdges) ||
+      !setEquals(old.hiders, hiders) ||
       old.labelBackground != labelBackground ||
       old.highlight != highlight;
 }
 
 /// Draws one bubble: its shape filled, its outline, and its laid-out
-/// [text] centred. Shared by the canvas and the type previews.
+/// [text] centred (none for a hidden one). Shared by the canvas and the type previews.
 void paintBubble(
   Canvas canvas,
   NodeStyle style,
   Rectangle<double> box,
-  TextPainter text,
+  TextPainter? text,
 ) {
   final rect = Rect.fromLTWH(box.left, box.top, box.width, box.height);
   final shape = shapePath(style.shape!, box);
@@ -250,7 +326,7 @@ void paintBubble(
             : StrokeCap.butt,
     );
   }
-  text.paint(canvas, rect.center - Offset(text.width / 2, text.height / 2));
+  text?.paint(canvas, rect.center - Offset(text.width / 2, text.height / 2));
 }
 
 /// A straight line sample in [style] from [from] to [to], with its

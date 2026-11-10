@@ -94,6 +94,7 @@ const nodeStyleFields = [
     FieldKind.choice,
     choices: _lineStyleChoices,
   ),
+  StyleFieldSpec('hidden', 'Hide what’s under it', FieldKind.toggle),
 ];
 
 /// Line fields. [withHierarchy] adds the hierarchical switch, which only

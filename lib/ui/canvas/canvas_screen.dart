@@ -285,6 +285,23 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
       smooth: settings.smoothLines,
     );
     final selection = _validSelection(snapshot);
+    final group = ref.watch(canvasGroupProvider);
+    final hidden = ref.watch(hiddenGroupsProvider);
+    final hiddenView = hidden?.greyed(
+      snapshot,
+      // Selecting a hidden bubble, or anything in its group (a line counts
+      // for both its ends), reveals the group.
+      selected: [
+        ...group,
+        if (selection is NodeHit) selection.id,
+        if (selection is EdgeHit)
+          if (snapshot.edges[selection.id] case final e?) ...[
+            e.sourceId,
+            e.targetId,
+          ],
+      ],
+      showHidden: settings.showHidden,
+    );
     final draggingWaypoint =
         _dragging && (_press?.hit is WaypointHit || _press?.bend != null);
     final colors = Theme.of(context).colorScheme;
@@ -338,7 +355,10 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
                         highlight: colors.primary,
                         selection: selection,
                         dimUnrelated: settings.dimUnrelated,
-                        group: ref.watch(canvasGroupProvider),
+                        group: group,
+                        greyedNodes: hiddenView?.nodes ?? const {},
+                        greyedEdges: hiddenView?.edges ?? const {},
+                        hiders: hidden?.hiders ?? const {},
                       ),
                     ),
                   ),
@@ -1270,7 +1290,7 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
   }
 }
 
-/// Canvas preferences: dimming and snap-to-grid.
+/// Canvas preferences: dimming, snap-to-grid, smooth lines.
 class _SettingsMenu extends ConsumerWidget {
   const _SettingsMenu({required this.settings});
 

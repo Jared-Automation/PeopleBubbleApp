@@ -15,6 +15,7 @@ import 'add_sheet.dart';
 import 'edit_sheet.dart';
 import 'list_row_tile.dart';
 import 'list_state.dart';
+import '../canvas/canvas_state.dart';
 import '../common/app_menu.dart';
 import '../common/empty_state.dart';
 import '../common/undo_ui.dart';
@@ -81,6 +82,10 @@ class _ListScreenState extends ConsumerState<ListScreen> {
   }
 
   Widget _buildList(GraphSnapshot snapshot, ListTree tree) {
+    final hidden = ref.watch(hiddenGroupsProvider);
+    final showHidden = ref.watch(
+      canvasSettingsProvider.select((s) => s.showHidden),
+    );
     final actions = ListRowActions(
       onToggle: (row) => ref.read(expansionProvider.notifier).toggle(row.key),
       onJumpTo: _jumpTo,
@@ -110,6 +115,10 @@ class _ListScreenState extends ConsumerState<ListScreen> {
           snapshot: snapshot,
           actions: actions,
           highlighted: tree.rows[i].key == _highlightKey,
+          greyed:
+              !showHidden &&
+              (hidden?.under.contains(tree.rows[i].nodeId) ?? false),
+          hider: hidden?.hiders.contains(tree.rows[i].nodeId) ?? false,
         ),
       ),
     );

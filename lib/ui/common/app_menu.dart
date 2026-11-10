@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../canvas/canvas_state.dart';
 import '../types/types_screen.dart';
 import 'backup_ui.dart';
 import 'delete_all.dart';
@@ -18,6 +19,10 @@ class AppMenuButton extends ConsumerWidget {
       contentPadding: EdgeInsets.zero,
     );
 
+    final showHidden = ref.watch(
+      canvasSettingsProvider.select((s) => s.showHidden),
+    );
+
     // The callbacks use this widget's context, not the menu's: the menu is
     // gone by the time they run.
     return PopupMenuButton<VoidCallback>(
@@ -30,6 +35,13 @@ class AppMenuButton extends ConsumerWidget {
             MaterialPageRoute<void>(builder: (_) => const TypesScreen()),
           ),
           child: item(Icons.category_outlined, 'Types'),
+        ),
+        CheckedPopupMenuItem(
+          value: () => ref
+              .read(canvasSettingsProvider.notifier)
+              .setShowHidden(!showHidden),
+          checked: showHidden,
+          child: const Text('Show hidden'),
         ),
         const PopupMenuDivider(),
         PopupMenuItem(

@@ -42,7 +42,7 @@ void main() {
     });
 
     test('appDefaults sets every field', () {
-      expect(NodeStyle.appDefaults.setFields.length, 11);
+      expect(NodeStyle.appDefaults.setFields.length, 12);
       expect(EdgeStyle.appDefaults.setFields.length, 5);
     });
   });
