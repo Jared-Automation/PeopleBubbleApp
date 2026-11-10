@@ -28,6 +28,7 @@ import 'radial_wheel.dart';
 import 'waypoint_painter.dart';
 import 'rename_dialog.dart';
 import '../common/app_menu.dart';
+import '../common/copy_paste.dart';
 import '../common/empty_state.dart';
 import '../common/undo_ui.dart';
 import '../types/item_style_sheet.dart';
@@ -894,6 +895,18 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
           icon: Icons.center_focus_strong_outlined,
           onSelected: () => _focus(id),
         ),
+        WheelItem(
+          label: 'Copy',
+          icon: Icons.copy_outlined,
+          onSelected: () => copyBubble(context, ref, id),
+        ),
+        // Only once something is copied; it's last, so nothing shifts.
+        if (ref.read(subtreeClipboardProvider) != null)
+          WheelItem(
+            label: 'Paste under',
+            icon: Icons.content_paste_go_outlined,
+            onSelected: () => pasteUnder(context, ref, id),
+          ),
       ],
     ),
   ];
@@ -1031,8 +1044,14 @@ class _CanvasScreenState extends ConsumerState<CanvasScreen>
     if (mounted) showUndoSnackBar(context, ref, 'Waypoint deleted');
   }
 
-  /// New bubbles from the clipboard's text, one per line, stacked at [at].
+  /// Pastes a copied bubble group at [at] if Copy's outline is still on the
+  /// clipboard; otherwise new bubbles from the clipboard's text, one per
+  /// line, stacked at [at].
   Future<void> _paste(Point<double> at) async {
+    // A copied bubble group, if Copy's outline is still on the clipboard.
+    final copy = await copyStillOnClipboard(ref);
+    if (!mounted) return;
+    if (copy != null) return pasteAt(context, ref, copy, at);
     final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '';
     final names = [
       for (final line in text.split('\n'))

@@ -17,6 +17,7 @@ import 'list_row_tile.dart';
 import 'list_state.dart';
 import '../canvas/canvas_state.dart';
 import '../common/app_menu.dart';
+import '../common/copy_paste.dart';
 import '../common/empty_state.dart';
 import '../common/undo_ui.dart';
 
@@ -93,6 +94,9 @@ class _ListScreenState extends ConsumerState<ListScreen> {
       onAdd: (row) => showAddSheet(context, parentId: row.nodeId),
       onEdit: (row) =>
           showEditSheet(context, nodeId: row.nodeId, edgeId: row.viaEdgeId),
+      onCopy: (row) => copyBubble(context, ref, row.nodeId),
+      onPaste: (row) => pasteUnder(context, ref, row.nodeId),
+      canPaste: ref.watch(subtreeClipboardProvider) != null,
       onUnlink: (row) => _unlink(snapshot, row),
       onDelete: (row) => confirmAndDeleteNode(context, ref, row.nodeId),
       onDrop: _drop,

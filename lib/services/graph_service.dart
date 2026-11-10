@@ -9,6 +9,7 @@ import '../data/graph_dump.dart';
 import '../data/graph_reader.dart';
 import '../domain/graph.dart';
 import '../domain/style.dart';
+import '../domain/subtree_copy.dart';
 import '../domain/types.dart';
 import '../perf_log.dart';
 import 'graph_errors.dart';
@@ -325,6 +326,97 @@ class GraphService {
     _requireEdge(s, id);
     await (_db.delete(_db.edges)..where((e) => e.id.equals(id))).go();
     await _deleteOrphanWaypoints();
+  });
+
+  // ------------------------------------------------------- copy & paste
+
+  /// Recreates [copy] as new bubbles (with its lines and bends) and returns
+  /// the new root's id. One undo step.
+  ///
+  /// With [parentId], the copy hangs under that bubble by a line of
+  /// [edgeTypeId], and the pasted bubbles are left unplaced so the canvas
+  /// lays them out next to it. Without, it becomes a new top-level group
+  /// whose layout is moved so the root lands at [at].
+  Future<String> pasteSubtree(
+    SubtreeCopy copy, {
+    String? parentId,
+    String? edgeTypeId,
+    Point<double>? at,
+  }) => _write('paste ${_q(copy.root.label)}', (s) async {
+    if (parentId != null) {
+      _requireNode(s, parentId);
+      _requireEdgeType(s, edgeTypeId ?? '');
+    }
+    final keepLayout = parentId == null;
+    final root = copy.root;
+    final shift = keepLayout && at != null && root.x != null && root.y != null
+        ? Point(at.x - root.x!, at.y - root.y!)
+        : const Point(0.0, 0.0);
+
+    final newIds = <String, String>{};
+    for (final n in copy.nodes.values) {
+      double? x, y;
+      if (keepLayout && n.x != null && n.y != null) {
+        x = n.x! + shift.x;
+        y = n.y! + shift.y;
+      } else if (keepLayout && n.id == copy.rootId && at != null) {
+        (x, y) = (at.x, at.y);
+      }
+      final id = await _insertNode(
+        s,
+        n.label,
+        // Types deleted since the copy are dropped.
+        [
+          for (final t in n.typeIds)
+            if (s.nodeTypes.byId.containsKey(t)) t,
+        ],
+        x: x,
+        y: y,
+      );
+      if (n.overrides != NodeStyle.empty) {
+        await _updateNode(id, NodesCompanion(style: Value(n.overrides)));
+      }
+      newIds[n.id] = id;
+    }
+
+    // Bends only make sense where the layout was kept.
+    final newWaypoints = <String, String>{};
+    if (keepLayout) {
+      for (final MapEntry(key: old, value: p) in copy.waypoints.entries) {
+        final id = newId();
+        await _db
+            .into(_db.waypoints)
+            .insert(
+              WaypointsCompanion.insert(
+                id: Value(id),
+                x: p.x + shift.x,
+                y: p.y + shift.y,
+              ),
+            );
+        newWaypoints[old] = id;
+      }
+    }
+    final baseEdge = s.edgeTypes.base!.id;
+    for (final e in copy.edges) {
+      final id = await _insertEdge(
+        newIds[e.sourceId]!,
+        newIds[e.targetId]!,
+        s.edgeTypes.byId.containsKey(e.typeId) ? e.typeId : baseEdge,
+        e.label,
+      );
+      if (e.overrides != EdgeStyle.empty) {
+        await _updateEdge(id, EdgesCompanion(style: Value(e.overrides)));
+      }
+      final bends = [for (final w in e.waypointIds) ?newWaypoints[w]];
+      if (bends.isNotEmpty) await _setEdgeWaypoints(id, bends);
+    }
+
+    final newRoot = newIds[copy.rootId]!;
+    // The pasted bubbles are all new, so this line can't form a loop.
+    if (parentId != null) {
+      await _insertEdge(parentId, newRoot, edgeTypeId!, null);
+    }
+    return newRoot;
   });
 
   // ------------------------------------------------------------ waypoints

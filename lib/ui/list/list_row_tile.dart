@@ -15,6 +15,9 @@ class ListRowActions {
     required this.onShowParents,
     required this.onAdd,
     required this.onEdit,
+    required this.onCopy,
+    required this.onPaste,
+    required this.canPaste,
     required this.onUnlink,
     required this.onDelete,
     required this.onDrop,
@@ -28,6 +31,13 @@ class ListRowActions {
   final void Function(ListRow row) onShowParents;
   final void Function(ListRow row) onAdd;
   final void Function(ListRow row) onEdit;
+  final void Function(ListRow row) onCopy;
+
+  /// Pastes the copied group under this row's bubble.
+  final void Function(ListRow row) onPaste;
+
+  /// Something has been copied, so rows offer Paste.
+  final bool canPaste;
   final void Function(ListRow row) onUnlink;
   final void Function(ListRow row) onDelete;
 
@@ -99,6 +109,21 @@ class ListRowTile extends StatelessWidget {
           backgroundColor: colors.primaryContainer,
           foregroundColor: colors.onPrimaryContainer,
         ),
+        SlidableAction(
+          onPressed: (_) => actions.onCopy(row),
+          icon: Icons.copy,
+          label: 'Copy',
+          backgroundColor: colors.secondaryContainer,
+          foregroundColor: colors.onSecondaryContainer,
+        ),
+        if (actions.canPaste)
+          SlidableAction(
+            onPressed: (_) => actions.onPaste(row),
+            icon: Icons.content_paste_go,
+            label: 'Paste',
+            backgroundColor: colors.tertiaryContainer,
+            foregroundColor: colors.onTertiaryContainer,
+          ),
       ]),
       endActionPane: _pane([
         if (!row.isRoot) _unlinkAction(colors),
